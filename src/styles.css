@@ -833,6 +833,18 @@ button {
   gap: 16px;
 }
 
+.task-modal__title strong {
+  display: block;
+  font-size: 1.1rem;
+}
+
+.task-modal__title span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .task-title-field {
   display: flex;
   align-items: center;
