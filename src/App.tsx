@@ -11,6 +11,10 @@ import {
   Link2,
   MinusCircle,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   PlusCircle,
   Search,
@@ -77,6 +81,7 @@ interface EmojiClickDetail {
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const TIME_GUTTER = 80;
 const DURATION_STEP = 15;
+const BOARD_TOP_PADDING = 18;
 const DEFAULT_HOUR_PRESETS: HourPreset[] = [
   {
     id: 'working-hours',
@@ -324,6 +329,8 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [weekStart, setWeekStart] = useState(startOfWeek(new Date()));
   const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [railOpen, setRailOpen] = useState(true);
   const [hourPresets, setHourPresets] = useState<HourPreset[]>(DEFAULT_HOUR_PRESETS);
   const [tasks, setTasks] = useState<TaskItem[]>(hasSupabaseConfig ? [] : starterTasks);
   const [loading, setLoading] = useState(false);
@@ -332,6 +339,7 @@ export default function App() {
   );
   const [statusMessage, setStatusMessage] = useState('Drag blocks across the planner to reschedule them.');
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [draggedPriorityTaskId, setDraggedPriorityTaskId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -850,6 +858,32 @@ export default function App() {
     await persistTaskUpdate(id, { done: nextDone }, previousTasks);
   };
 
+  const updateTaskPriority = async (id: string, priority: TaskPriority) => {
+    const previousTasks = tasks;
+    const target = tasks.find((task) => task.id === id);
+    if (!target || target.priority === priority) {
+      return;
+    }
+
+    const nextTasks = sortTasksChronologically(
+      tasks.map((task) => (task.id === id ? { ...task, priority } : task)),
+    );
+    setTasks(nextTasks);
+    setStatusMessage(`${target.title} moved to ${priority} priority.`);
+    await persistTaskUpdate(id, { priority }, previousTasks);
+  };
+
+  const handlePriorityDrop = async (event: DragEvent<HTMLElement>, bucket: PriorityBucket) => {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData('text/priority-task-id') || draggedPriorityTaskId;
+    setDraggedPriorityTaskId(null);
+    if (!taskId) {
+      return;
+    }
+
+    await updateTaskPriority(taskId, bucket);
+  };
+
   const moveTask = async (taskId: string, dateKey: string, startMinutes: number) => {
     const task = tasks.find((entry) => entry.id === taskId);
     if (!task) {
@@ -930,7 +964,7 @@ export default function App() {
     const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
     const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
     const startMinutes = clampStart(
-      ((event.clientY - bounds.top + event.currentTarget.scrollTop) / PIXELS_PER_MINUTE) + boardWindow.start,
+      ((event.clientY - bounds.top + event.currentTarget.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE) + boardWindow.start,
       task.duration,
     );
     await moveTask(taskId, weekDates[dayIndex], startMinutes);
@@ -1036,6 +1070,12 @@ export default function App() {
         <article
           key={task.id}
           className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}`}
+          draggable
+          onDragStart={(event) => {
+            event.dataTransfer.setData('text/priority-task-id', task.id);
+            setDraggedPriorityTaskId(task.id);
+          }}
+          onDragEnd={() => setDraggedPriorityTaskId(null)}
           onClick={() => {
             openEditTaskModal(task);
           }}
@@ -1073,7 +1113,8 @@ export default function App() {
   );
 
   return (
-    <div className="reclaim-shell">
+    <div className={`reclaim-shell ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>
+      {sidebarOpen ? (
       <aside className="reclaim-sidebar">
         <div className="brand">
           <div className="brand__mark">
@@ -1126,21 +1167,33 @@ export default function App() {
           })}
         </nav>
       </aside>
+      ) : null}
 
       <main className="workspace">
-        <div className="workspace-banner">
-          <span>Priority-aware planning with drag-and-drop scheduling and automatic placement.</span>
-          <button type="button" className="banner-pill">
-            {loading ? 'Syncing' : hasSupabaseConfig ? 'Supabase live' : 'Local mode'}
-          </button>
-        </div>
-
         <header className="workspace-header">
           <div>
             <h1>{view === 'planner' ? 'Planner' : 'Priorities'}</h1>
             <p>{statusMessage}</p>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setSidebarOpen((current) => !current)}
+              aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+            >
+              {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+            </button>
+            {view === 'planner' ? (
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setRailOpen((current) => !current)}
+                aria-label={railOpen ? 'Hide rail panel' : 'Show rail panel'}
+              >
+                {railOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </button>
+            ) : null}
             <button type="button" className="ghost-btn" onClick={() => void handleAutoPlaceDay()}>
               Find a time
             </button>
@@ -1155,7 +1208,7 @@ export default function App() {
         </header>
 
         {view === 'planner' ? (
-          <section className="planner-view">
+          <section className={`planner-view ${railOpen ? '' : 'rail-collapsed'}`}>
             <div className="planner-main">
               <section className="planner-surface">
                 <div className="planner-surface__header">
@@ -1209,7 +1262,7 @@ export default function App() {
 
                   <div
                     className="week-board__body"
-                    style={{ height: `${boardWindow.height}px` }}
+                    style={{ height: `${boardWindow.height + BOARD_TOP_PADDING}px` }}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => void handleBoardDrop(event)}
                   >
@@ -1220,7 +1273,7 @@ export default function App() {
                     </div>
 
                     {boardWindow.markers.map((marker) => (
-                      <div key={marker} className="hour-line" style={{ top: `${(marker - boardWindow.start) * PIXELS_PER_MINUTE}px` }}>
+                      <div key={marker} className="hour-line" style={{ top: `${BOARD_TOP_PADDING + (marker - boardWindow.start) * PIXELS_PER_MINUTE}px` }}>
                         <span>{formatDisplayTime(marker)}</span>
                         <div />
                       </div>
@@ -1236,7 +1289,7 @@ export default function App() {
                           key={task.id}
                           className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''}`}
                           style={{
-                            top: `${(task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
+                            top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
                             width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
                             height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
@@ -1263,6 +1316,7 @@ export default function App() {
               </section>
             </div>
 
+            {railOpen ? (
             <aside className="planner-rail">
               <section className="rail-panel">
                 <div className="rail-heading">
@@ -1298,7 +1352,12 @@ export default function App() {
                 {railTab === 'priorities' ? (
                   <div className="priority-groups compact">
                     {bucketOrder.map((bucket) => (
-                      <section key={bucket} className="priority-group">
+                      <section
+                        key={bucket}
+                        className="priority-group priority-dropzone"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => void handlePriorityDrop(event, bucket)}
+                      >
                         <div className="priority-group__header">
                           <span>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</span>
                           <small>{groupedTasks[bucket].length || 'No items'}</small>
@@ -1339,6 +1398,7 @@ export default function App() {
                 )}
               </section>
             </aside>
+            ) : null}
           </section>
         ) : (
           <section className="priorities-view">
@@ -1356,7 +1416,12 @@ export default function App() {
 
             <div className="priority-board">
               {bucketOrder.map((bucket) => (
-                <section key={bucket} className="priority-column">
+                <section
+                  key={bucket}
+                  className="priority-column priority-dropzone"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => void handlePriorityDrop(event, bucket)}
+                >
                   <div className="priority-column__header">
                     <strong>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</strong>
                     <span>{groupedTasks[bucket].length ? `${groupedTasks[bucket].length} item${groupedTasks[bucket].length > 1 ? 's' : ''}` : 'No items'}</span>

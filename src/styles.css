@@ -84,6 +84,10 @@ button {
   grid-template-columns: 200px minmax(0, 1fr);
 }
 
+.reclaim-shell.sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ─── Sidebar ──────────────────────────────────────────────────────────────── */
 
 .reclaim-sidebar {
@@ -234,31 +238,6 @@ button {
   flex-direction: column;
 }
 
-/* Slim banner */
-
-.workspace-banner {
-  height: 38px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-
-.banner-pill {
-  border: 0;
-  background: var(--primary);
-  color: white;
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 0.79rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
 /* Header */
 
 .workspace-header,
@@ -402,6 +381,10 @@ button {
   gap: 16px;
 }
 
+.planner-view.rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .planner-main,
 .planner-rail,
 .priorities-view {
@@ -516,7 +499,7 @@ button {
 
 .week-board__header {
   display: grid;
-  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  grid-template-columns: 80px repeat(7, minmax(0, 1fr));
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -583,7 +566,7 @@ button {
 
 .week-board__columns {
   position: absolute;
-  inset: 0 0 0 72px;
+  inset: 0 0 0 80px;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
@@ -601,7 +584,7 @@ button {
   left: 0;
   right: 0;
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 80px 1fr;
   align-items: start;
 }
 
@@ -828,6 +811,15 @@ button {
 .priority-group {
   display: grid;
   gap: 6px;
+}
+
+.priority-dropzone {
+  border-radius: 14px;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.priority-dropzone:hover {
+  background: rgba(22, 82, 240, 0.025);
 }
 
 .priority-group__header {
