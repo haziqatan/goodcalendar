@@ -97,10 +97,14 @@ function findSlotOnDate(
   dateKey: string,
   duration: number,
   startMinutes: number,
+  windowStart: number,
+  windowEnd: number,
   excludeId?: string,
 ) {
-  const firstStart = clampStart(Math.max(AUTO_START_MINUTES, startMinutes), duration);
-  for (let cursor = firstStart; cursor + duration <= AUTO_END_MINUTES; cursor += SNAP_MINUTES) {
+  const normalizedWindowStart = clampStart(windowStart, duration);
+  const normalizedWindowEnd = Math.min(windowEnd, MINUTES_IN_DAY);
+  const firstStart = clampStart(Math.max(normalizedWindowStart, startMinutes), duration);
+  for (let cursor = firstStart; cursor + duration <= normalizedWindowEnd; cursor += SNAP_MINUTES) {
     if (!findConflict(tasks, dateKey, cursor, duration, excludeId)) {
       return cursor;
     }
@@ -108,22 +112,33 @@ function findSlotOnDate(
   return null;
 }
 
+function getTaskWindow(task: Pick<TaskItem, 'hours_start' | 'hours_end'>) {
+  return {
+    windowStart: task.hours_start ?? AUTO_START_MINUTES,
+    windowEnd: task.hours_end ?? AUTO_END_MINUTES,
+  };
+}
+
 export function findPlacement(
   tasks: TaskItem[],
-  task: Pick<TaskItem, 'duration' | 'deadline'>,
+  task: Pick<TaskItem, 'duration' | 'deadline' | 'schedule_after' | 'hours_start' | 'hours_end'>,
   preferredDate: string,
   preferredStart: number,
   excludeId?: string,
 ) {
-  const deadline = task.deadline && task.deadline >= preferredDate ? task.deadline : preferredDate;
+  const earliestDate = task.schedule_after && task.schedule_after > preferredDate ? task.schedule_after : preferredDate;
+  const deadline = task.deadline && task.deadline >= earliestDate ? task.deadline : earliestDate;
+  const { windowStart, windowEnd } = getTaskWindow(task);
 
   for (let offset = 0; offset <= AUTO_LOOKAHEAD_DAYS; offset += 1) {
-    const dateKey = addDays(preferredDate, offset);
+    const dateKey = addDays(earliestDate, offset);
     const slot = findSlotOnDate(
       tasks,
       dateKey,
       task.duration,
-      offset === 0 ? preferredStart : AUTO_START_MINUTES,
+      offset === 0 ? preferredStart : windowStart,
+      windowStart,
+      windowEnd,
       excludeId,
     );
     if (slot !== null) {
@@ -144,7 +159,7 @@ export function findPlacement(
 
   for (let offset = 0; offset <= AUTO_LOOKAHEAD_DAYS; offset += 1) {
     const dateKey = addDays(deadline, offset);
-    const slot = findSlotOnDate(tasks, dateKey, task.duration, AUTO_START_MINUTES, excludeId);
+    const slot = findSlotOnDate(tasks, dateKey, task.duration, windowStart, windowStart, windowEnd, excludeId);
     if (slot !== null) {
       return {
         scheduled_date: dateKey,
@@ -195,7 +210,16 @@ export function autoPlaceDay(tasks: TaskItem[], dateKey: string) {
   const placedTasks: TaskItem[] = [];
 
   orderedDayItems.forEach((task) => {
-    const slot = findSlotOnDate([...stationaryTasks, ...placedTasks], dateKey, task.duration, searchFrom, task.id);
+    const { windowStart, windowEnd } = getTaskWindow(task);
+    const slot = findSlotOnDate(
+      [...stationaryTasks, ...placedTasks],
+      dateKey,
+      task.duration,
+      Math.max(searchFrom, windowStart),
+      windowStart,
+      windowEnd,
+      task.id,
+    );
     if (slot === null) {
       unresolved += 1;
       placedTasks.push(task);

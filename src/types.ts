@@ -9,6 +9,12 @@ export interface TaskItem {
   type: TaskType;
   priority: TaskPriority;
   duration: number;
+  min_duration?: number;
+  max_duration?: number;
+  hour_preset?: string;
+  hours_start?: number;
+  hours_end?: number;
+  schedule_after?: string;
   deadline?: string;
   scheduled_date: string;
   start_minutes: number;

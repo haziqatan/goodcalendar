@@ -7,12 +7,58 @@ create table if not exists public.schedule_items (
   type text not null check (type in ('task', 'focus', 'buffer')),
   priority text not null check (priority in ('low', 'medium', 'high')),
   duration integer not null check (duration > 0),
+  min_duration integer check (min_duration is null or min_duration > 0),
+  max_duration integer check (max_duration is null or max_duration > 0),
+  hour_preset text,
+  hours_start integer check (hours_start is null or (hours_start >= 0 and hours_start < 1440)),
+  hours_end integer check (hours_end is null or (hours_end > 0 and hours_end <= 1440)),
+  schedule_after date,
   deadline date,
   scheduled_date date not null,
   start_minutes integer not null check (start_minutes >= 0 and start_minutes < 1440),
   done boolean not null default false,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint schedule_items_hours_window check (
+    (hours_start is null and hours_end is null) or
+    (hours_start is not null and hours_end is not null and hours_start < hours_end)
+  ),
+  constraint schedule_items_duration_bounds check (
+    min_duration is null or max_duration is null or min_duration <= max_duration
+  )
 );
+
+alter table public.schedule_items add column if not exists min_duration integer;
+alter table public.schedule_items add column if not exists max_duration integer;
+alter table public.schedule_items add column if not exists hour_preset text;
+alter table public.schedule_items add column if not exists hours_start integer;
+alter table public.schedule_items add column if not exists hours_end integer;
+alter table public.schedule_items add column if not exists schedule_after date;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'schedule_items_hours_window'
+  ) then
+    alter table public.schedule_items
+      add constraint schedule_items_hours_window check (
+        (hours_start is null and hours_end is null) or
+        (hours_start is not null and hours_end is not null and hours_start < hours_end)
+      );
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'schedule_items_duration_bounds'
+  ) then
+    alter table public.schedule_items
+      add constraint schedule_items_duration_bounds check (
+        min_duration is null or max_duration is null or min_duration <= max_duration
+      );
+  end if;
+end $$;
 
 alter table public.schedule_items enable row level security;
 

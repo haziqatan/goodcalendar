@@ -245,9 +245,7 @@ button {
 .nav-item,
 .priority-card,
 .scheduled-item,
-.search-field,
-.task-form input,
-.task-form select {
+.search-field {
   transition: 150ms ease;
 }
 
@@ -556,36 +554,10 @@ button {
   padding: 14px;
 }
 
-.rail-panel--composer {
-  position: sticky;
-  top: 16px;
-}
-
-.task-form {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.task-form input,
-.task-form select,
 .search-field {
   border: 1px solid var(--line);
   background: var(--surface-soft);
   border-radius: 999px;
-}
-
-.task-form input,
-.task-form select {
-  width: 100%;
-  padding: 11px 14px;
-  color: var(--text);
-}
-
-.task-form__row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .rail-tabs {
@@ -815,13 +787,273 @@ button {
   background: #9fa8bb;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 23, 35, 0.42);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  z-index: 30;
+  padding: 24px;
+}
+
+.task-modal,
+.settings-modal {
+  width: min(760px, 100%);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 30px 70px rgba(22, 31, 49, 0.22);
+  border: 1px solid rgba(216, 223, 236, 0.9);
+  position: relative;
+}
+
+.task-modal {
+  padding: 28px;
+}
+
+.settings-modal {
+  padding: 22px;
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+}
+
+.task-modal__form {
+  display: grid;
+  gap: 16px;
+}
+
+.task-title-field {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 2px solid rgba(92, 104, 240, 0.18);
+  border-radius: 18px;
+}
+
+.task-title-field input,
+.preset-row input,
+.preset-row select,
+.modal-card input,
+.modal-card select,
+.notes-card textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.task-title-field input {
+  font-size: 1.85rem;
+  line-height: 1.1;
+}
+
+.modal-error {
+  margin: -4px 0 0 6px;
+  color: #b44444;
+  font-size: 0.95rem;
+}
+
+.emoji-row,
+.priority-row,
+.duration-controls,
+.modal-actions,
+.hours-card__actions,
+.settings-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.emoji-row {
+  flex-wrap: wrap;
+}
+
+.emoji-chip,
+.priority-pill,
+.preset-kind {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.emoji-chip {
+  padding: 8px 12px;
+}
+
+.priority-row {
+  flex-wrap: wrap;
+}
+
+.priority-pill {
+  padding: 9px 14px;
+}
+
+.priority-pill.active.high {
+  background: rgba(235, 125, 115, 0.16);
+  border-color: rgba(235, 125, 115, 0.42);
+}
+
+.priority-pill.active.medium {
+  background: rgba(92, 174, 220, 0.16);
+  border-color: rgba(92, 174, 220, 0.42);
+}
+
+.priority-pill.active.low {
+  background: rgba(71, 179, 107, 0.14);
+  border-color: rgba(71, 179, 107, 0.42);
+}
+
+.modal-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.modal-card span,
+.hours-card__label span {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.modal-card strong,
+.hours-card__label strong,
+.settings-modal__header strong {
+  font-size: 1rem;
+}
+
+.modal-card--duration {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-card--duration strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 2rem;
+  font-weight: 500;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+}
+
+.modal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.hours-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hours-card__label small,
+.helper-card small,
+.priority-card p,
+.warning-pill p,
+.settings-modal__header p {
+  color: var(--muted);
+}
+
+.hours-card__label small,
+.helper-card small,
+.settings-modal__header p {
+  display: block;
+  margin-top: 4px;
+}
+
+.hours-card__actions select {
+  min-width: 180px;
+}
+
+.helper-card {
+  align-content: center;
+}
+
+.notes-card textarea {
+  resize: vertical;
+  min-height: 96px;
+  font: inherit;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+}
+
+.settings-modal__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.settings-modal__header p {
+  margin: 4px 0 0;
+}
+
+.preset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.preset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 140px 140px auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.preset-row input,
+.preset-row select {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.preset-kind {
+  padding: 8px 12px;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.settings-modal__actions {
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
 @media (max-width: 1300px) {
   .planner-view {
     grid-template-columns: 1fr;
-  }
-
-  .rail-panel--composer {
-    position: static;
   }
 
   .priority-board {
@@ -861,12 +1093,20 @@ button {
     flex-wrap: wrap;
   }
 
-  .task-form__row {
+  .modal-grid,
+  .preset-row {
     grid-template-columns: 1fr;
   }
 
   .focus-strip__legend {
     display: grid;
     gap: 6px;
+  }
+
+  .hours-card,
+  .modal-card--duration,
+  .settings-modal__actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

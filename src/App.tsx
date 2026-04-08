@@ -9,14 +9,20 @@ import {
   CircleHelp,
   Clock3,
   Link2,
+  MinusCircle,
   MoreHorizontal,
   Plus,
+  PlusCircle,
   Search,
+  Settings2,
+  SmilePlus,
   Users,
+  X,
 } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import {
   AUTO_START_MINUTES,
+  AUTO_END_MINUTES,
   PIXELS_PER_MINUTE,
   addDays,
   autoPlaceDay,
@@ -37,31 +43,57 @@ import type { ScheduleWarning, TaskItem, TaskPriority, TaskType } from './types'
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
 type PriorityBucket = 'critical' | TaskPriority;
+type PresetKind = 'working' | 'personal' | 'custom';
+
+interface HourPreset {
+  id: string;
+  name: string;
+  start_minutes: number;
+  end_minutes: number;
+  kind: PresetKind;
+}
 
 interface TaskDraft {
   title: string;
   type: TaskType;
   priority: TaskPriority;
   duration: number;
+  flexible: boolean;
+  minDuration: number;
+  maxDuration: number;
+  hourPresetId: string;
+  scheduleAfter: string;
   deadline: string;
+  description: string;
 }
 
+const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const TIME_GUTTER = 72;
-const VISIBLE_START_MINUTES = 6 * 60;
-const hourMarkers = Array.from({ length: 15 }, (_, index) => (6 + index) * 60);
-const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
+const EMOJI_OPTIONS = ['😀', '🚀', '🧠', '🍱', '📞', '✍️'];
+const DURATION_STEP = 15;
+const DEFAULT_HOUR_PRESETS: HourPreset[] = [
+  { id: 'working-hours', name: 'Working Hours', start_minutes: 8 * 60, end_minutes: 18 * 60, kind: 'working' },
+  { id: 'personal-hours', name: 'Personal Hours', start_minutes: 18 * 60, end_minutes: 22 * 60, kind: 'personal' },
+];
 
 const starterTasks: TaskItem[] = [
   {
     id: 'starter-1',
-    title: 'Lunch',
+    title: '🍱 Lunch',
     type: 'task',
     priority: 'high',
     duration: 60,
+    min_duration: 30,
+    max_duration: 60,
+    hour_preset: 'Working Hours',
+    hours_start: 8 * 60,
+    hours_end: 18 * 60,
+    schedule_after: toDateKey(new Date()),
     deadline: addDays(toDateKey(new Date()), 1),
     scheduled_date: toDateKey(new Date()),
     start_minutes: 11 * 60 + 45,
     done: false,
+    description: 'Team lunch block',
   },
   {
     id: 'starter-2',
@@ -69,6 +101,10 @@ const starterTasks: TaskItem[] = [
     type: 'buffer',
     priority: 'medium',
     duration: 75,
+    hour_preset: 'Working Hours',
+    hours_start: 8 * 60,
+    hours_end: 18 * 60,
+    schedule_after: toDateKey(new Date()),
     deadline: toDateKey(new Date()),
     scheduled_date: toDateKey(new Date()),
     start_minutes: 12 * 60 + 45,
@@ -76,14 +112,21 @@ const starterTasks: TaskItem[] = [
   },
   {
     id: 'starter-3',
-    title: 'Deep work',
+    title: '🧠 Deep work',
     type: 'focus',
     priority: 'high',
     duration: 120,
+    min_duration: 60,
+    max_duration: 150,
+    hour_preset: 'Working Hours',
+    hours_start: 8 * 60,
+    hours_end: 18 * 60,
+    schedule_after: addDays(toDateKey(new Date()), 1),
     deadline: addDays(toDateKey(new Date()), 2),
     scheduled_date: addDays(toDateKey(new Date()), 1),
     start_minutes: 13 * 60,
     done: false,
+    description: 'Sprint planning follow-up',
   },
 ];
 
@@ -98,6 +141,8 @@ const navSecondary = [
   { label: 'Meetings', icon: Users, children: ['Smart Meetings', 'Scheduling Links'] },
   { label: 'Calendar Sync', icon: Link2 },
 ];
+
+const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
 
 function normalizeTask(task: TaskItem) {
   return {
@@ -133,6 +178,35 @@ function taskTypeLabel(type: TaskType) {
   return 'Task';
 }
 
+function clampDuration(value: number) {
+  return Math.max(DURATION_STEP, Math.round(value / DURATION_STEP) * DURATION_STEP);
+}
+
+function minutesToTimeInput(value: number) {
+  return formatTime(value);
+}
+
+function timeInputToMinutes(value: string) {
+  const [hours, minutes] = value.split(':').map(Number);
+  return (hours * 60) + minutes;
+}
+
+function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
+  return {
+    title: '',
+    type: 'task',
+    priority: 'high',
+    duration: 60,
+    flexible: false,
+    minDuration: 30,
+    maxDuration: 120,
+    hourPresetId,
+    scheduleAfter: selectedDate,
+    deadline: selectedDate,
+    description: '',
+  };
+}
+
 export default function App() {
   const todayKey = toDateKey(new Date());
   const [view, setView] = useState<ViewMode>('planner');
@@ -140,6 +214,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [weekStart, setWeekStart] = useState(startOfWeek(new Date()));
   const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [hourPresets, setHourPresets] = useState<HourPreset[]>(DEFAULT_HOUR_PRESETS);
   const [tasks, setTasks] = useState<TaskItem[]>(hasSupabaseConfig ? [] : starterTasks);
   const [loading, setLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState(
@@ -147,13 +222,40 @@ export default function App() {
   );
   const [statusMessage, setStatusMessage] = useState('Drag blocks across the planner to reschedule them.');
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<TaskDraft>({
-    title: '',
-    type: 'task',
-    priority: 'medium',
-    duration: 60,
-    deadline: todayKey,
-  });
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showHoursSettings, setShowHoursSettings] = useState(false);
+  const [draft, setDraft] = useState<TaskDraft>(buildDraft(todayKey, DEFAULT_HOUR_PRESETS[0].id));
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const stored = window.localStorage.getItem(HOURS_STORAGE_KEY);
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as HourPreset[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setHourPresets(parsed);
+        setDraft((current) => ({
+          ...current,
+          hourPresetId: parsed.some((preset) => preset.id === current.hourPresetId) ? current.hourPresetId : parsed[0].id,
+        }));
+      }
+    } catch {
+      window.localStorage.removeItem(HOURS_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(HOURS_STORAGE_KEY, JSON.stringify(hourPresets));
+  }, [hourPresets]);
 
   useEffect(() => {
     const load = async () => {
@@ -243,12 +345,40 @@ export default function App() {
     return Math.round((tasks.filter((task) => task.done).length / tasks.length) * 100);
   }, [tasks]);
 
-  const capacityMinutes = 7 * 12 * 60;
+  const boardWindow = useMemo(() => {
+    const presetStarts = hourPresets.map((preset) => preset.start_minutes);
+    const presetEnds = hourPresets.map((preset) => preset.end_minutes);
+    const taskStarts = weekTasks.map((task) => task.hours_start ?? task.start_minutes);
+    const taskEnds = weekTasks.map((task) => task.hours_end ?? (task.start_minutes + task.duration));
+    const rawStart = Math.min(6 * 60, ...presetStarts, ...(taskStarts.length ? taskStarts : [AUTO_START_MINUTES]));
+    const rawEnd = Math.max(20 * 60, ...presetEnds, ...(taskEnds.length ? taskEnds : [AUTO_END_MINUTES]));
+    const start = Math.max(0, Math.floor(rawStart / 60) * 60);
+    const end = Math.min(24 * 60, Math.ceil(rawEnd / 60) * 60);
+    const markers = Array.from({ length: Math.max((end - start) / 60 + 1, 1) }, (_, index) => start + index * 60);
+    return {
+      start,
+      end,
+      markers,
+      height: Math.max((end - start) * PIXELS_PER_MINUTE, 640),
+    };
+  }, [hourPresets, weekTasks]);
+
+  const capacityMinutes = 7 * (AUTO_END_MINUTES - AUTO_START_MINUTES);
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
+
+  const selectedPreset =
+    hourPresets.find((preset) => preset.id === draft.hourPresetId) ??
+    hourPresets[0] ??
+    DEFAULT_HOUR_PRESETS[0];
 
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
     setWeekStart(startOfWeek(fromDateKey(dateKey)));
+  };
+
+  const openTaskModal = () => {
+    setDraft(buildDraft(selectedDate, hourPresets[0]?.id ?? DEFAULT_HOUR_PRESETS[0].id));
+    setShowTaskModal(true);
   };
 
   const shiftWeek = (offset: number) => {
@@ -303,30 +433,53 @@ export default function App() {
   const createTask = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!draft.title.trim() || draft.duration <= 0) {
-      setStatusMessage('Add a task name and a positive duration first.');
+    if (!draft.title.trim()) {
+      setStatusMessage('Task title is required.');
+      return;
+    }
+
+    const duration = clampDuration(draft.duration);
+    const minDuration = draft.flexible ? clampDuration(Math.min(draft.minDuration, draft.maxDuration)) : undefined;
+    const maxDuration = draft.flexible ? clampDuration(Math.max(draft.minDuration, draft.maxDuration)) : undefined;
+    const scheduleAfter = draft.scheduleAfter || selectedDate;
+    const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
+
+    if (preset.end_minutes <= preset.start_minutes) {
+      setStatusMessage('Selected hours need an end time after the start time.');
       return;
     }
 
     const placement = findPlacement(
       tasks,
-      { duration: draft.duration, deadline: draft.deadline || undefined },
+      {
+        duration,
+        deadline: draft.deadline || undefined,
+        schedule_after: scheduleAfter,
+        hours_start: preset.start_minutes,
+        hours_end: preset.end_minutes,
+      },
       selectedDate,
-      AUTO_START_MINUTES,
+      preset.start_minutes,
     );
 
     if (!placement) {
-      setStatusMessage('No open slot was found in the current scheduling window.');
+      setStatusMessage('No open slot was found for the selected hours and schedule-after date.');
       return;
     }
 
     const item: TaskItem = {
       id: crypto.randomUUID(),
       title: draft.title.trim(),
-      description: '',
+      description: draft.description.trim(),
       type: draft.type,
       priority: draft.priority,
-      duration: draft.duration,
+      duration,
+      min_duration: minDuration,
+      max_duration: maxDuration,
+      hour_preset: preset.name,
+      hours_start: preset.start_minutes,
+      hours_end: preset.end_minutes,
+      schedule_after: scheduleAfter,
       deadline: draft.deadline || undefined,
       scheduled_date: placement.scheduled_date,
       start_minutes: placement.start_minutes,
@@ -336,12 +489,12 @@ export default function App() {
     setTasks((prev) => sortTasksChronologically([...prev, item]));
     focusDate(item.scheduled_date);
     setView('planner');
+    setShowTaskModal(false);
     setStatusMessage(
       `${item.title} placed on ${formatDate(item.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} at ${formatTime(
         item.start_minutes,
       )}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
     );
-    setDraft((prev) => ({ ...prev, title: '', duration: 60, deadline: item.scheduled_date }));
 
     if (!supabase) {
       return;
@@ -376,8 +529,24 @@ export default function App() {
     const previousTasks = tasks;
     const desiredStart = clampStart(startMinutes, task.duration);
     const collision = findConflict(tasks, dateKey, desiredStart, task.duration, task.id);
-    const placement = collision
-      ? findPlacement(tasks, { duration: task.duration, deadline: task.deadline }, dateKey, desiredStart, task.id)
+    const outsideWindow =
+      Boolean(task.schedule_after && dateKey < task.schedule_after) ||
+      Boolean(task.hours_start !== undefined && desiredStart < task.hours_start) ||
+      Boolean(task.hours_end !== undefined && desiredStart + task.duration > task.hours_end);
+    const placement = collision || outsideWindow
+      ? findPlacement(
+          tasks,
+          {
+            duration: task.duration,
+            deadline: task.deadline,
+            schedule_after: task.schedule_after,
+            hours_start: task.hours_start,
+            hours_end: task.hours_end,
+          },
+          dateKey,
+          desiredStart,
+          task.id,
+        )
       : { scheduled_date: dateKey, start_minutes: desiredStart, afterDeadline: Boolean(task.deadline && dateKey > task.deadline) };
 
     if (!placement) {
@@ -400,7 +569,7 @@ export default function App() {
     setTasks(nextTasks);
     focusDate(placement.scheduled_date);
     setStatusMessage(
-      collision
+      collision || outsideWindow
         ? `${task.title} was snapped to ${formatTime(placement.start_minutes)} on ${formatDate(placement.scheduled_date, {
             weekday: 'short',
             month: 'short',
@@ -432,7 +601,7 @@ export default function App() {
     const relativeX = event.clientX - bounds.left - TIME_GUTTER;
     const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
     const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
-    const startMinutes = clampStart(((event.clientY - bounds.top) / PIXELS_PER_MINUTE) + VISIBLE_START_MINUTES, task.duration);
+    const startMinutes = clampStart(((event.clientY - bounds.top) / PIXELS_PER_MINUTE) + boardWindow.start, task.duration);
     await moveTask(taskId, weekDates[dayIndex], startMinutes);
     setDraggedTaskId(null);
   };
@@ -449,6 +618,30 @@ export default function App() {
           : 'Selected day is already packed cleanly.',
     );
     await persistBatchPositions(result.tasks, previousTasks);
+  };
+
+  const updatePreset = (id: string, patch: Partial<HourPreset>) => {
+    setHourPresets((prev) => prev.map((preset) => (preset.id === id ? { ...preset, ...patch } : preset)));
+  };
+
+  const addCustomPreset = () => {
+    const id = `custom-${crypto.randomUUID()}`;
+    setHourPresets((prev) => [
+      ...prev,
+      { id, name: `Custom Hours ${prev.filter((preset) => preset.kind === 'custom').length + 1}`, start_minutes: 9 * 60, end_minutes: 17 * 60, kind: 'custom' },
+    ]);
+    setDraft((prev) => ({ ...prev, hourPresetId: id }));
+  };
+
+  const deletePreset = (id: string) => {
+    const remaining = hourPresets.filter((preset) => preset.id !== id);
+    const nextPresets = remaining.length > 0 ? remaining : DEFAULT_HOUR_PRESETS;
+    const fallback = nextPresets[0];
+    setHourPresets(nextPresets);
+    setDraft((current) => ({
+      ...current,
+      hourPresetId: current.hourPresetId === id ? fallback.id : current.hourPresetId,
+    }));
   };
 
   const renderPriorityCard = (task: TaskItem, compact = false) => (
@@ -484,6 +677,7 @@ export default function App() {
         <div className="priority-card__meta">
           <span>{task.priority} priority</span>
           <span>{task.duration} mins</span>
+          {task.hour_preset ? <span>{task.hour_preset}</span> : null}
           {task.deadline ? <span>due {formatDate(task.deadline, { month: 'short', day: 'numeric' })}</span> : null}
         </div>
       </div>
@@ -565,14 +759,7 @@ export default function App() {
             <button type="button" className="ghost-btn" onClick={() => focusDate(todayKey)}>
               Today
             </button>
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={() => {
-                setView('planner');
-                setRailTab('tasks');
-              }}
-            >
+            <button type="button" className="primary-btn" onClick={openTaskModal}>
               <Plus size={16} />
               New Task
             </button>
@@ -634,6 +821,7 @@ export default function App() {
 
                   <div
                     className="week-board__body"
+                    style={{ height: `${boardWindow.height}px` }}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => void handleBoardDrop(event)}
                   >
@@ -643,8 +831,8 @@ export default function App() {
                       ))}
                     </div>
 
-                    {hourMarkers.map((marker) => (
-                      <div key={marker} className="hour-line" style={{ top: `${(marker - VISIBLE_START_MINUTES) * PIXELS_PER_MINUTE}px` }}>
+                    {boardWindow.markers.map((marker) => (
+                      <div key={marker} className="hour-line" style={{ top: `${(marker - boardWindow.start) * PIXELS_PER_MINUTE}px` }}>
                         <span>{formatTime(marker)}</span>
                         <div />
                       </div>
@@ -658,7 +846,7 @@ export default function App() {
                           key={task.id}
                           className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''}`}
                           style={{
-                            top: `${(task.start_minutes - VISIBLE_START_MINUTES) * PIXELS_PER_MINUTE}px`,
+                            top: `${(task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
                             width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
                             height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
@@ -681,63 +869,10 @@ export default function App() {
             </div>
 
             <aside className="planner-rail">
-              <section className="rail-panel rail-panel--composer">
-                <div className="rail-heading">
-                  <strong>New task</strong>
-                  <span>{formatDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
-                </div>
-                <form className="task-form" onSubmit={createTask}>
-                  <input
-                    value={draft.title}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    placeholder="Search or create a task…"
-                  />
-                  <div className="task-form__row">
-                    <select
-                      value={draft.priority}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))}
-                    >
-                      <option value="high">High</option>
-                      <option value="medium">Medium</option>
-                      <option value="low">Low</option>
-                    </select>
-                    <select
-                      value={draft.type}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
-                    >
-                      <option value="task">Task</option>
-                      <option value="focus">Focus</option>
-                      <option value="buffer">Buffer</option>
-                    </select>
-                  </div>
-                  <div className="task-form__row">
-                    <input
-                      type="number"
-                      min={15}
-                      step={15}
-                      value={draft.duration}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, duration: Number(event.target.value) }))}
-                    />
-                    <input
-                      type="date"
-                      value={draft.deadline}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
-                    />
-                  </div>
-                  <button type="submit" className="primary-btn wide">
-                    Add task
-                  </button>
-                </form>
-              </section>
-
               <section className="rail-panel">
-                <div className="rail-tabs">
-                  <button type="button" className={railTab === 'priorities' ? 'active' : ''} onClick={() => setRailTab('priorities')}>
-                    Priorities
-                  </button>
-                  <button type="button" className={railTab === 'tasks' ? 'active' : ''} onClick={() => setRailTab('tasks')}>
-                    Tasks
-                  </button>
+                <div className="rail-heading">
+                  <strong>Selected day</strong>
+                  <span>{formatDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
                 </div>
 
                 <label className="search-field">
@@ -755,6 +890,15 @@ export default function App() {
                     ))}
                   </div>
                 ) : null}
+
+                <div className="rail-tabs">
+                  <button type="button" className={railTab === 'priorities' ? 'active' : ''} onClick={() => setRailTab('priorities')}>
+                    Priorities
+                  </button>
+                  <button type="button" className={railTab === 'tasks' ? 'active' : ''} onClick={() => setRailTab('tasks')}>
+                    Tasks
+                  </button>
+                </div>
 
                 {railTab === 'priorities' ? (
                   <div className="priority-groups compact">
@@ -840,6 +984,241 @@ export default function App() {
           </div>
         </footer>
       </main>
+
+      {showTaskModal ? (
+        <div className="modal-backdrop" onClick={() => setShowTaskModal(false)}>
+          <section className="task-modal" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setShowTaskModal(false)}>
+              <X size={20} />
+            </button>
+
+            <form className="task-modal__form" onSubmit={createTask}>
+              <div className="task-title-field">
+                <SmilePlus size={24} />
+                <input
+                  value={draft.title}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+                  placeholder="Task name..."
+                  autoFocus
+                />
+              </div>
+              {!draft.title.trim() ? <p className="modal-error">Task title is required</p> : null}
+
+              <div className="emoji-row">
+                {EMOJI_OPTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="emoji-chip"
+                    onClick={() => setDraft((prev) => ({ ...prev, title: prev.title ? `${prev.title} ${emoji}` : emoji }))}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+
+              <div className="priority-row">
+                {(['high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
+                  <button
+                    key={priority}
+                    type="button"
+                    className={`priority-pill ${draft.priority === priority ? 'active' : ''} ${priority}`}
+                    onClick={() => setDraft((prev) => ({ ...prev, priority }))}
+                  >
+                    {priority} priority
+                  </button>
+                ))}
+              </div>
+
+              <div className="modal-card modal-card--duration">
+                <div>
+                  <span>Duration</span>
+                  <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} mins`}</strong>
+                </div>
+                <div className="duration-controls">
+                  <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration - DURATION_STEP) }))}>
+                    <MinusCircle size={20} />
+                  </button>
+                  <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration + DURATION_STEP) }))}>
+                    <PlusCircle size={20} />
+                  </button>
+                </div>
+              </div>
+
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={draft.flexible}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))}
+                />
+                <span>Flexible split duration</span>
+              </label>
+
+              <div className="modal-grid">
+                <label className="modal-card">
+                  <span>Min duration</span>
+                  <input
+                    type="number"
+                    min={15}
+                    step={15}
+                    value={draft.minDuration}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, minDuration: clampDuration(Number(event.target.value)) }))}
+                    disabled={!draft.flexible}
+                  />
+                </label>
+                <label className="modal-card">
+                  <span>Max duration</span>
+                  <input
+                    type="number"
+                    min={15}
+                    step={15}
+                    value={draft.maxDuration}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, maxDuration: clampDuration(Number(event.target.value)) }))}
+                    disabled={!draft.flexible}
+                  />
+                </label>
+              </div>
+
+              <div className="modal-card hours-card">
+                <div className="hours-card__label">
+                  <span>Hours</span>
+                  <strong>{selectedPreset.name}</strong>
+                  <small>{formatRange(selectedPreset.start_minutes, selectedPreset.end_minutes - selectedPreset.start_minutes)}</small>
+                </div>
+                <div className="hours-card__actions">
+                  <select
+                    value={draft.hourPresetId}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, hourPresetId: event.target.value }))}
+                  >
+                    {hourPresets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="ghost-btn" onClick={() => setShowHoursSettings(true)}>
+                    <Settings2 size={16} />
+                    Edit hours
+                  </button>
+                </div>
+              </div>
+
+              <div className="modal-grid">
+                <label className="modal-card">
+                  <span>Schedule after</span>
+                  <input
+                    type="date"
+                    value={draft.scheduleAfter}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, scheduleAfter: event.target.value }))}
+                  />
+                </label>
+                <label className="modal-card">
+                  <span>Due date</span>
+                  <input
+                    type="date"
+                    value={draft.deadline}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
+                  />
+                </label>
+              </div>
+
+              <div className="modal-grid">
+                <label className="modal-card">
+                  <span>Type</span>
+                  <select
+                    value={draft.type}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
+                  >
+                    <option value="task">Task</option>
+                    <option value="focus">Focus</option>
+                    <option value="buffer">Buffer</option>
+                  </select>
+                </label>
+                <div className="modal-card helper-card">
+                  <span>Will schedule inside</span>
+                  <strong>{selectedPreset.name}</strong>
+                  <small>
+                    {formatTime(selectedPreset.start_minutes)} to {formatTime(selectedPreset.end_minutes)}
+                  </small>
+                </div>
+              </div>
+
+              <label className="modal-card notes-card">
+                <span>Notes</span>
+                <textarea
+                  value={draft.description}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, description: event.target.value }))}
+                  placeholder="Add notes..."
+                  rows={4}
+                />
+              </label>
+
+              <div className="modal-actions">
+                <button type="button" className="ghost-btn" onClick={() => setShowTaskModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-btn">
+                  Create
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {showHoursSettings ? (
+        <div className="modal-backdrop" onClick={() => setShowHoursSettings(false)}>
+          <section className="settings-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-modal__header">
+              <div>
+                <strong>Hours settings</strong>
+                <p>Edit working, personal, or custom scheduling windows.</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setShowHoursSettings(false)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="preset-list">
+              {hourPresets.map((preset) => (
+                <div key={preset.id} className="preset-row">
+                  <input
+                    value={preset.name}
+                    onChange={(event) => updatePreset(preset.id, { name: event.target.value })}
+                  />
+                  <input
+                    type="time"
+                    value={minutesToTimeInput(preset.start_minutes)}
+                    onChange={(event) => updatePreset(preset.id, { start_minutes: timeInputToMinutes(event.target.value) })}
+                  />
+                  <input
+                    type="time"
+                    value={minutesToTimeInput(preset.end_minutes)}
+                    onChange={(event) => updatePreset(preset.id, { end_minutes: timeInputToMinutes(event.target.value) })}
+                  />
+                  {preset.kind === 'custom' ? (
+                    <button type="button" className="ghost-btn" onClick={() => deletePreset(preset.id)}>
+                      Remove
+                    </button>
+                  ) : (
+                    <span className="preset-kind">{preset.kind}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="settings-modal__actions">
+              <button type="button" className="ghost-btn" onClick={addCustomPreset}>
+                <Plus size={16} />
+                Add custom hours
+              </button>
+              <button type="button" className="primary-btn" onClick={() => setShowHoursSettings(false)}>
+                Done
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
