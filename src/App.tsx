@@ -757,6 +757,32 @@ export default function App() {
     }
   };
 
+  const deleteTask = async () => {
+    if (!editingTaskId) {
+      return;
+    }
+
+    const previousTasks = tasks;
+    const target = tasks.find((task) => task.id === editingTaskId);
+    if (!target) {
+      return;
+    }
+
+    setTasks((prev) => prev.filter((task) => task.id !== editingTaskId));
+    closeTaskModal();
+    setStatusMessage(`${target.title} deleted.`);
+
+    if (!supabase) {
+      return;
+    }
+
+    const { error } = await supabase.from('schedule_items').delete().eq('id', editingTaskId);
+    if (error) {
+      setSyncMessage(`Delete failed: ${error.message}`);
+      setTasks(previousTasks);
+    }
+  };
+
   const toggleTask = async (id: string) => {
     const previousTasks = tasks;
     const target = tasks.find((task) => task.id === id);
@@ -1408,7 +1434,6 @@ export default function App() {
               <div className="modal-card hours-card">
                 <div className="hours-card__label">
                   <span>Hours</span>
-                  <strong>{selectedPreset.name}</strong>
                   <small>{presetSummary(selectedPreset)}</small>
                 </div>
                 <div className="hours-card__actions">
@@ -1424,7 +1449,7 @@ export default function App() {
                   </select>
                   <button type="button" className="ghost-btn" onClick={() => setShowHoursSettings(true)}>
                     <Settings2 size={16} />
-                    Edit hours
+                    Edit
                   </button>
                 </div>
               </div>
@@ -1478,6 +1503,11 @@ export default function App() {
               </label>
 
               <div className="modal-actions">
+                {editingTaskId ? (
+                  <button type="button" className="ghost-btn danger-btn" onClick={() => void deleteTask()}>
+                    Delete
+                  </button>
+                ) : null}
                 <button type="button" className="ghost-btn" onClick={closeTaskModal}>
                   Cancel
                 </button>
