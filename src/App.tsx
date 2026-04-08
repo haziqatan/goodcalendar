@@ -26,6 +26,7 @@ import {
   PIXELS_PER_MINUTE,
   addDays,
   autoPlaceDay,
+  buildScheduleBlocks,
   buildWarnings,
   clampStart,
   findConflict,
@@ -34,11 +35,12 @@ import {
   formatRange,
   formatTime,
   fromDateKey,
+  isFlexibleTask,
   sortTasksChronologically,
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { ScheduleWarning, TaskItem, TaskPriority, TaskType } from './types';
+import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -296,14 +298,40 @@ export default function App() {
     [weekStart],
   );
 
-  const weekTasks = useMemo(
-    () => sortTasksChronologically(tasks.filter((task) => weekDates.includes(task.scheduled_date))),
-    [tasks, weekDates],
+  const planningStart = useMemo(() => {
+    const seeds = [todayKey, weekDates[0], ...tasks.map((task) => task.schedule_after ?? task.scheduled_date)];
+    return seeds.reduce((earliest, current) => (current < earliest ? current : earliest));
+  }, [tasks, todayKey, weekDates]);
+
+  const planningEnd = useMemo(() => {
+    const seeds = [weekDates[6], ...tasks.map((task) => task.deadline ?? task.scheduled_date)];
+    const latest = seeds.reduce((currentLatest, current) => (current > currentLatest ? current : currentLatest));
+    return addDays(latest, 14);
+  }, [tasks, weekDates]);
+
+  const optimizedBlocks = useMemo<ScheduleBlock[]>(
+    () => buildScheduleBlocks(tasks, planningStart, planningEnd),
+    [tasks, planningStart, planningEnd],
   );
 
-  const selectedDayItems = useMemo(
-    () => sortTasksChronologically(tasks.filter((task) => task.scheduled_date === selectedDate)),
-    [tasks, selectedDate],
+  const blocksByTaskId = useMemo(() => {
+    const grouped = new Map<string, ScheduleBlock[]>();
+    optimizedBlocks.forEach((block) => {
+      const current = grouped.get(block.task_id) ?? [];
+      current.push(block);
+      grouped.set(block.task_id, current);
+    });
+    return grouped;
+  }, [optimizedBlocks]);
+
+  const weekTasks = useMemo(
+    () => optimizedBlocks.filter((block) => weekDates.includes(block.scheduled_date)),
+    [optimizedBlocks, weekDates],
+  );
+
+  const selectedDayItems = useMemo<ScheduleBlock[]>(
+    () => optimizedBlocks.filter((block) => block.scheduled_date === selectedDate).sort((left, right) => left.start_minutes - right.start_minutes),
+    [optimizedBlocks, selectedDate],
   );
 
   const warnings = useMemo<ScheduleWarning[]>(
@@ -365,8 +393,8 @@ export default function App() {
   const boardWindow = useMemo(() => {
     const presetStarts = hourPresets.map((preset) => preset.start_minutes);
     const presetEnds = hourPresets.map((preset) => preset.end_minutes);
-    const taskStarts = weekTasks.map((task) => task.hours_start ?? task.start_minutes);
-    const taskEnds = weekTasks.map((task) => task.hours_end ?? (task.start_minutes + task.duration));
+    const taskStarts = weekTasks.map((task) => task.start_minutes);
+    const taskEnds = weekTasks.map((task) => task.start_minutes + task.duration);
     const rawStart = Math.min(6 * 60, ...presetStarts, ...(taskStarts.length ? taskStarts : [AUTO_START_MINUTES]));
     const rawEnd = Math.max(20 * 60, ...presetEnds, ...(taskEnds.length ? taskEnds : [AUTO_END_MINUTES]));
     const start = Math.max(0, Math.floor(rawStart / 60) * 60);
@@ -431,6 +459,14 @@ export default function App() {
     setShowTaskModal(true);
   };
 
+  const openEditTaskModalById = (taskId: string) => {
+    const task = tasks.find((entry) => entry.id === taskId);
+    if (!task) {
+      return;
+    }
+    openEditTaskModal(task);
+  };
+
   const shiftWeek = (offset: number) => {
     const next = new Date(weekStart);
     next.setDate(next.getDate() + offset);
@@ -489,8 +525,10 @@ export default function App() {
     }
 
     const duration = clampDuration(draft.duration);
-    const minDuration = draft.flexible ? clampDuration(Math.min(draft.minDuration, draft.maxDuration)) : undefined;
-    const maxDuration = draft.flexible ? clampDuration(Math.max(draft.minDuration, draft.maxDuration)) : undefined;
+    const normalizedMinDuration = draft.flexible ? Math.min(clampDuration(Math.min(draft.minDuration, draft.maxDuration)), duration) : undefined;
+    const normalizedMaxDuration = draft.flexible
+      ? Math.min(Math.max(clampDuration(Math.max(draft.minDuration, draft.maxDuration)), normalizedMinDuration ?? DURATION_STEP), duration)
+      : undefined;
     const scheduleAfter = draft.scheduleAfter || selectedDate;
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
 
@@ -500,24 +538,21 @@ export default function App() {
     }
 
     const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) : null;
-    const placement = findPlacement(
+    const placementContext = {
+      duration,
+      deadline: draft.deadline || undefined,
+      schedule_after: scheduleAfter,
+      hours_start: preset.start_minutes,
+      hours_end: preset.end_minutes,
+    };
+
+    let placement = findPlacement(
       tasks,
-      {
-        duration,
-        deadline: draft.deadline || undefined,
-        schedule_after: scheduleAfter,
-        hours_start: preset.start_minutes,
-        hours_end: preset.end_minutes,
-      },
+      placementContext,
       existingTask?.scheduled_date ?? selectedDate,
       existingTask?.start_minutes ?? preset.start_minutes,
       editingTaskId ?? undefined,
     );
-
-    if (!placement) {
-      setStatusMessage('No open slot was found for the selected hours and schedule-after date.');
-      return;
-    }
 
     const item: TaskItem = {
       id: editingTaskId ?? crypto.randomUUID(),
@@ -526,17 +561,42 @@ export default function App() {
       type: draft.type,
       priority: draft.priority,
       duration,
-      min_duration: minDuration,
-      max_duration: maxDuration,
+      min_duration: normalizedMinDuration,
+      max_duration: normalizedMaxDuration,
       hour_preset: preset.name,
       hours_start: preset.start_minutes,
       hours_end: preset.end_minutes,
       schedule_after: scheduleAfter,
       deadline: draft.deadline || undefined,
-      scheduled_date: placement.scheduled_date,
-      start_minutes: placement.start_minutes,
+      scheduled_date: placement?.scheduled_date ?? (existingTask?.scheduled_date ?? scheduleAfter),
+      start_minutes: placement?.start_minutes ?? (existingTask?.start_minutes ?? preset.start_minutes),
       done: existingTask?.done ?? false,
     };
+
+    if (isFlexibleTask(item)) {
+      const previewTasks = editingTaskId ? tasks.map((task) => (task.id === editingTaskId ? item : task)) : [...tasks, item];
+      const previewStartSeeds = [planningStart, item.schedule_after ?? item.scheduled_date];
+      const previewStart = previewStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
+      const previewEndSeed = item.deadline ?? item.scheduled_date;
+      const previewEnd = addDays(previewEndSeed > planningEnd ? previewEndSeed : planningEnd, 14);
+      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd).filter((block) => block.task_id === item.id);
+
+      if (previewBlocks.length === 0) {
+        setStatusMessage('No open split schedule was found for the selected hours and schedule-after date.');
+        return;
+      }
+
+      placement = {
+        scheduled_date: previewBlocks[0].scheduled_date,
+        start_minutes: previewBlocks[0].start_minutes,
+        afterDeadline: Boolean(item.deadline && previewBlocks[previewBlocks.length - 1].scheduled_date > item.deadline),
+      };
+      item.scheduled_date = placement.scheduled_date;
+      item.start_minutes = placement.start_minutes;
+    } else if (!placement) {
+      setStatusMessage('No open slot was found for the selected hours and schedule-after date.');
+      return;
+    }
 
     const previousTasks = tasks;
     setTasks((prev) =>
@@ -731,42 +791,51 @@ export default function App() {
   };
 
   const renderPriorityCard = (task: TaskItem, compact = false) => (
-    <article
-      key={task.id}
-      className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}`}
-      onClick={() => {
-        openEditTaskModal(task);
-      }}
-    >
-      <div className="priority-card__accent" />
-      <div className="priority-card__content">
-        <div className="priority-card__top">
-          <div>
-            <span className="priority-card__group">{taskTypeLabel(task.type)}</span>
-            <strong>{task.title}</strong>
+    (() => {
+      const taskBlocks = blocksByTaskId.get(task.id) ?? [];
+      const nextBlock = taskBlocks[0];
+      const scheduleLabel = taskBlocks.length > 1 && nextBlock
+        ? `${taskBlocks.length} blocks · next ${formatDate(nextBlock.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} ${formatTime(nextBlock.start_minutes)}`
+        : `${formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${formatRange(task.start_minutes, task.duration)}`;
+
+      return (
+        <article
+          key={task.id}
+          className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}`}
+          onClick={() => {
+            openEditTaskModal(task);
+          }}
+        >
+          <div className="priority-card__accent" />
+          <div className="priority-card__content">
+            <div className="priority-card__top">
+              <div>
+                <span className="priority-card__group">{taskTypeLabel(task.type)}</span>
+                <strong>{task.title}</strong>
+              </div>
+              <button
+                type="button"
+                className="icon-btn subtle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void toggleTask(task.id);
+                }}
+              >
+                {task.done ? 'Undo' : 'Done'}
+              </button>
+            </div>
+            <p>{scheduleLabel}</p>
+            <div className="priority-card__meta">
+              <span>{task.priority} priority</span>
+              <span>{task.duration} mins</span>
+              {taskBlocks.length > 1 ? <span>split</span> : null}
+              {task.hour_preset ? <span>{task.hour_preset}</span> : null}
+              {task.deadline ? <span>due {formatDate(task.deadline, { month: 'short', day: 'numeric' })}</span> : null}
+            </div>
           </div>
-          <button
-            type="button"
-            className="icon-btn subtle"
-            onClick={(event) => {
-              event.stopPropagation();
-              void toggleTask(task.id);
-            }}
-          >
-            {task.done ? 'Undo' : 'Done'}
-          </button>
-        </div>
-        <p>
-          {formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · {formatRange(task.start_minutes, task.duration)}
-        </p>
-        <div className="priority-card__meta">
-          <span>{task.priority} priority</span>
-          <span>{task.duration} mins</span>
-          {task.hour_preset ? <span>{task.hour_preset}</span> : null}
-          {task.deadline ? <span>due {formatDate(task.deadline, { month: 'short', day: 'numeric' })}</span> : null}
-        </div>
-      </div>
-    </article>
+        </article>
+      );
+    })()
   );
 
   return (
@@ -926,6 +995,8 @@ export default function App() {
                     {weekTasks.map((task) => {
                       const dayIndex = weekDates.indexOf(task.scheduled_date);
                       if (dayIndex === -1) return null;
+                      const sourceTask = tasks.find((entry) => entry.id === task.task_id);
+                      const draggable = sourceTask ? !isFlexibleTask(sourceTask) : !task.is_split_segment;
                       return (
                         <article
                           key={task.id}
@@ -936,15 +1007,19 @@ export default function App() {
                             width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
                             height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
                           }}
-                          draggable
+                          draggable={draggable}
                           onDragStart={(event) => {
-                            event.dataTransfer.setData('text/task-id', task.id);
-                            setDraggedTaskId(task.id);
+                            if (!draggable) {
+                              event.preventDefault();
+                              return;
+                            }
+                            event.dataTransfer.setData('text/task-id', task.task_id);
+                            setDraggedTaskId(task.task_id);
                           }}
                           onDragEnd={() => setDraggedTaskId(null)}
-                          onClick={() => openEditTaskModal(task)}
+                          onClick={() => openEditTaskModalById(task.task_id)}
                         >
-                          <strong>{task.title}</strong>
+                          <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
                           <p>{formatRange(task.start_minutes, task.duration)}</p>
                         </article>
                       );
@@ -1008,9 +1083,9 @@ export default function App() {
                       <p className="empty-note">No tasks scheduled for this day.</p>
                     ) : (
                       selectedDayItems.map((task) => (
-                        <article key={task.id} className="scheduled-item" onClick={() => openEditTaskModal(task)}>
+                        <article key={task.id} className="scheduled-item" onClick={() => openEditTaskModalById(task.task_id)}>
                           <div>
-                            <strong>{task.title}</strong>
+                            <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
                             <p>{formatRange(task.start_minutes, task.duration)}</p>
                           </div>
                           <button
@@ -1018,7 +1093,7 @@ export default function App() {
                             className="icon-btn subtle"
                             onClick={(event) => {
                               event.stopPropagation();
-                              void toggleTask(task.id);
+                              void toggleTask(task.task_id);
                             }}
                           >
                             {task.done ? 'Undo' : 'Done'}

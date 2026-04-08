@@ -1,4 +1,4 @@
-import type { ScheduleWarning, TaskItem, TaskPriority } from '../types';
+import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority } from '../types';
 
 export const MINUTES_IN_DAY = 24 * 60;
 export const SNAP_MINUTES = 15;
@@ -117,6 +117,168 @@ function getTaskWindow(task: Pick<TaskItem, 'hours_start' | 'hours_end'>) {
     windowStart: task.hours_start ?? AUTO_START_MINUTES,
     windowEnd: task.hours_end ?? AUTO_END_MINUTES,
   };
+}
+
+export function isFlexibleTask(task: Pick<TaskItem, 'min_duration' | 'max_duration'>) {
+  return Boolean(task.min_duration || task.max_duration);
+}
+
+function toBlock(task: TaskItem): ScheduleBlock {
+  return {
+    id: task.id,
+    task_id: task.id,
+    title: task.title,
+    description: task.description,
+    type: task.type,
+    priority: task.priority,
+    duration: task.duration,
+    scheduled_date: task.scheduled_date,
+    start_minutes: task.start_minutes,
+    deadline: task.deadline,
+    done: task.done,
+    is_split_segment: false,
+    segment_index: 1,
+    segment_count: 1,
+  };
+}
+
+function compareTaskImportance(left: TaskItem, right: TaskItem) {
+  const priorityDifference = priorityWeight[left.priority] - priorityWeight[right.priority];
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
+
+  const leftDeadline = left.deadline ?? '9999-12-31';
+  const rightDeadline = right.deadline ?? '9999-12-31';
+  if (leftDeadline !== rightDeadline) {
+    return leftDeadline.localeCompare(rightDeadline);
+  }
+
+  const leftScheduleAfter = left.schedule_after ?? left.scheduled_date;
+  const rightScheduleAfter = right.schedule_after ?? right.scheduled_date;
+  if (leftScheduleAfter !== rightScheduleAfter) {
+    return leftScheduleAfter.localeCompare(rightScheduleAfter);
+  }
+
+  return left.title.localeCompare(right.title);
+}
+
+function findFreeGaps(blocks: ScheduleBlock[], windowStart: number, windowEnd: number) {
+  const relevant = [...blocks]
+    .filter((block) => block.start_minutes < windowEnd && block.start_minutes + block.duration > windowStart)
+    .sort((left, right) => left.start_minutes - right.start_minutes);
+
+  const gaps: Array<{ start: number; end: number }> = [];
+  let cursor = windowStart;
+
+  relevant.forEach((block) => {
+    if (block.start_minutes > cursor) {
+      gaps.push({ start: cursor, end: block.start_minutes });
+    }
+    cursor = Math.max(cursor, block.start_minutes + block.duration);
+  });
+
+  if (cursor < windowEnd) {
+    gaps.push({ start: cursor, end: windowEnd });
+  }
+
+  return gaps;
+}
+
+function fitChunkDuration(remaining: number, gapSize: number, minDuration: number, maxDuration: number) {
+  let candidate = Math.min(remaining, gapSize, maxDuration);
+  candidate = Math.floor(candidate / SNAP_MINUTES) * SNAP_MINUTES;
+
+  for (let duration = candidate; duration >= minDuration; duration -= SNAP_MINUTES) {
+    const nextRemaining = remaining - duration;
+    if (nextRemaining === 0 || nextRemaining >= minDuration) {
+      return duration;
+    }
+  }
+
+  if (remaining <= maxDuration && remaining <= gapSize && remaining >= minDuration) {
+    return remaining;
+  }
+
+  return null;
+}
+
+export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDate: string): ScheduleBlock[] {
+  const fixedTasks = sortTasksChronologically(tasks.filter((task) => !isFlexibleTask(task) || task.done));
+  const flexibleTasks = sortTasksChronologically(tasks.filter((task) => isFlexibleTask(task) && !task.done)).sort(compareTaskImportance);
+  const blocksByDate = new Map<string, ScheduleBlock[]>();
+
+  fixedTasks.forEach((task) => {
+    const block = toBlock(task);
+    const current = blocksByDate.get(block.scheduled_date) ?? [];
+    current.push(block);
+    blocksByDate.set(block.scheduled_date, current);
+  });
+
+  const flexibleBlocks: ScheduleBlock[] = [];
+
+  flexibleTasks.forEach((task) => {
+    const minDuration = Math.max(task.min_duration ?? SNAP_MINUTES, SNAP_MINUTES);
+    const maxDuration = Math.max(task.max_duration ?? task.duration, minDuration);
+    const scheduleAfter = task.schedule_after && task.schedule_after > startDate ? task.schedule_after : startDate;
+    const { windowStart, windowEnd } = getTaskWindow(task);
+    let remaining = task.duration;
+    let segmentIndex = 0;
+
+    for (let dateKey = scheduleAfter; dateKey <= endDate && remaining > 0; dateKey = addDays(dateKey, 1)) {
+      const dateBlocks = blocksByDate.get(dateKey) ?? [];
+      const gaps = findFreeGaps(dateBlocks, windowStart, windowEnd);
+
+      gaps.forEach((gap) => {
+        if (remaining <= 0) {
+          return;
+        }
+
+        const chunk = fitChunkDuration(remaining, gap.end - gap.start, minDuration, maxDuration);
+        if (!chunk) {
+          return;
+        }
+
+        segmentIndex += 1;
+        const block: ScheduleBlock = {
+          id: `${task.id}::${segmentIndex}`,
+          task_id: task.id,
+          title: task.title,
+          description: task.description,
+          type: task.type,
+          priority: task.priority,
+          duration: chunk,
+          scheduled_date: dateKey,
+          start_minutes: gap.start,
+          deadline: task.deadline,
+          done: task.done,
+          is_split_segment: true,
+          segment_index: segmentIndex,
+          segment_count: 0,
+        };
+
+        remaining -= chunk;
+        flexibleBlocks.push(block);
+        dateBlocks.push(block);
+        dateBlocks.sort((left, right) => left.start_minutes - right.start_minutes);
+        blocksByDate.set(dateKey, dateBlocks);
+      });
+    }
+
+    const segmentCount = segmentIndex || 1;
+    flexibleBlocks
+      .filter((block) => block.task_id === task.id)
+      .forEach((block) => {
+        block.segment_count = segmentCount;
+      });
+  });
+
+  return [...fixedTasks.map(toBlock), ...flexibleBlocks].sort((left, right) => {
+    if (left.scheduled_date === right.scheduled_date) {
+      return left.start_minutes - right.start_minutes;
+    }
+    return left.scheduled_date.localeCompare(right.scheduled_date);
+  });
 }
 
 export function findPlacement(

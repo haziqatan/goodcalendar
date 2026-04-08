@@ -21,6 +21,23 @@ export interface TaskItem {
   done: boolean;
 }
 
+export interface ScheduleBlock {
+  id: string;
+  task_id: string;
+  title: string;
+  description?: string;
+  type: TaskType;
+  priority: TaskPriority;
+  duration: number;
+  scheduled_date: string;
+  start_minutes: number;
+  deadline?: string;
+  done: boolean;
+  is_split_segment: boolean;
+  segment_index: number;
+  segment_count: number;
+}
+
 export interface ScheduleStats {
   tasks: number;
   focusMinutes: number;
