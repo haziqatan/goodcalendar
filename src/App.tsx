@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { DragEvent, FormEvent } from 'react';
+import {
+  BarChart3,
+  CalendarRange,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Clock3,
+  Link2,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Users,
+} from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import {
   AUTO_START_MINUTES,
@@ -20,30 +34,9 @@ import {
 } from './lib/scheduler';
 import type { ScheduleWarning, TaskItem, TaskPriority, TaskType } from './types';
 
-const starterTasks: TaskItem[] = [
-  {
-    id: 'starter-1',
-    title: 'Deep work block',
-    type: 'focus',
-    priority: 'high',
-    duration: 120,
-    deadline: toDateKey(new Date()),
-    scheduled_date: toDateKey(new Date()),
-    start_minutes: 9 * 60,
-    done: false,
-  },
-  {
-    id: 'starter-2',
-    title: 'Prepare client follow-up',
-    type: 'task',
-    priority: 'medium',
-    duration: 45,
-    deadline: addDays(toDateKey(new Date()), 1),
-    scheduled_date: toDateKey(new Date()),
-    start_minutes: 12 * 60 + 30,
-    done: false,
-  },
-];
+type ViewMode = 'planner' | 'priorities';
+type RailTab = 'priorities' | 'tasks';
+type PriorityBucket = 'critical' | TaskPriority;
 
 interface TaskDraft {
   title: string;
@@ -53,7 +46,58 @@ interface TaskDraft {
   deadline: string;
 }
 
-const hourMarkers = Array.from({ length: 24 }, (_, hour) => hour * 60);
+const TIME_GUTTER = 72;
+const VISIBLE_START_MINUTES = 6 * 60;
+const hourMarkers = Array.from({ length: 15 }, (_, index) => (6 + index) * 60);
+const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
+
+const starterTasks: TaskItem[] = [
+  {
+    id: 'starter-1',
+    title: 'Lunch',
+    type: 'task',
+    priority: 'high',
+    duration: 60,
+    deadline: addDays(toDateKey(new Date()), 1),
+    scheduled_date: toDateKey(new Date()),
+    start_minutes: 11 * 60 + 45,
+    done: false,
+  },
+  {
+    id: 'starter-2',
+    title: 'Lunch Hour',
+    type: 'buffer',
+    priority: 'medium',
+    duration: 75,
+    deadline: toDateKey(new Date()),
+    scheduled_date: toDateKey(new Date()),
+    start_minutes: 12 * 60 + 45,
+    done: false,
+  },
+  {
+    id: 'starter-3',
+    title: 'Deep work',
+    type: 'focus',
+    priority: 'high',
+    duration: 120,
+    deadline: addDays(toDateKey(new Date()), 2),
+    scheduled_date: addDays(toDateKey(new Date()), 1),
+    start_minutes: 13 * 60,
+    done: false,
+  },
+];
+
+const navPrimary = [
+  { id: 'planner' as ViewMode, label: 'Planner', icon: CalendarRange },
+  { id: 'priorities' as ViewMode, label: 'Priorities', icon: BarChart3 },
+];
+
+const navSecondary = [
+  { label: 'Stats', icon: BarChart3 },
+  { label: 'Time blocking', icon: Clock3, children: ['Focus', 'Habits', 'Buffers', 'Tasks'] },
+  { label: 'Meetings', icon: Users, children: ['Smart Meetings', 'Scheduling Links'] },
+  { label: 'Calendar Sync', icon: Link2 },
+];
 
 function normalizeTask(task: TaskItem) {
   return {
@@ -62,17 +106,46 @@ function normalizeTask(task: TaskItem) {
   };
 }
 
+function taskBucket(task: TaskItem, todayKey: string): PriorityBucket {
+  if (task.deadline && (task.deadline < todayKey || task.scheduled_date > task.deadline)) {
+    return 'critical';
+  }
+  return task.priority;
+}
+
+function sortPriorityTasks(tasks: TaskItem[]) {
+  return [...tasks].sort((left, right) => {
+    const leftDeadline = left.deadline ?? '9999-12-31';
+    const rightDeadline = right.deadline ?? '9999-12-31';
+    if (leftDeadline !== rightDeadline) {
+      return leftDeadline.localeCompare(rightDeadline);
+    }
+    if (left.scheduled_date !== right.scheduled_date) {
+      return left.scheduled_date.localeCompare(right.scheduled_date);
+    }
+    return left.start_minutes - right.start_minutes;
+  });
+}
+
+function taskTypeLabel(type: TaskType) {
+  if (type === 'focus') return 'Focus';
+  if (type === 'buffer') return 'Buffer';
+  return 'Task';
+}
+
 export default function App() {
-  const today = new Date();
-  const todayKey = toDateKey(today);
-  const [weekStart, setWeekStart] = useState(startOfWeek(today));
+  const todayKey = toDateKey(new Date());
+  const [view, setView] = useState<ViewMode>('planner');
+  const [railTab, setRailTab] = useState<RailTab>('priorities');
+  const [query, setQuery] = useState('');
+  const [weekStart, setWeekStart] = useState(startOfWeek(new Date()));
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [tasks, setTasks] = useState<TaskItem[]>(hasSupabaseConfig ? [] : starterTasks);
   const [loading, setLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState(
-    hasSupabaseConfig ? 'Connecting to Supabase schedule…' : 'Local mode only. Add Supabase env vars to sync across devices.',
+    hasSupabaseConfig ? 'Connecting to Supabase schedule…' : 'Local mode. Add Vercel env vars to sync across devices.',
   );
-  const [statusMessage, setStatusMessage] = useState('Drag tasks on the calendar to reschedule them.');
+  const [statusMessage, setStatusMessage] = useState('Drag blocks across the planner to reschedule them.');
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draft, setDraft] = useState<TaskDraft>({
     title: '',
@@ -92,7 +165,7 @@ export default function App() {
       } else if (data) {
         const normalized = sortTasksChronologically((data as TaskItem[]).map(normalizeTask));
         setTasks(normalized);
-        setSyncMessage(normalized.length === 0 ? 'Supabase connected. Your schedule is empty.' : 'Supabase connected.');
+        setSyncMessage(normalized.length === 0 ? 'Supabase connected. No tasks yet.' : 'Supabase connected.');
       }
       setLoading(false);
     };
@@ -104,25 +177,74 @@ export default function App() {
     [weekStart],
   );
 
-  const dayItems = useMemo(
+  const weekTasks = useMemo(
+    () => sortTasksChronologically(tasks.filter((task) => weekDates.includes(task.scheduled_date))),
+    [tasks, weekDates],
+  );
+
+  const selectedDayItems = useMemo(
     () => sortTasksChronologically(tasks.filter((task) => task.scheduled_date === selectedDate)),
-    [selectedDate, tasks],
+    [tasks, selectedDate],
   );
 
   const warnings = useMemo<ScheduleWarning[]>(
     () => buildWarnings(tasks, todayKey, selectedDate),
-    [selectedDate, tasks, todayKey],
+    [tasks, todayKey, selectedDate],
   );
+
+  const filteredOpenTasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return tasks
+      .filter((task) => !task.done)
+      .filter((task) => (normalizedQuery ? task.title.toLowerCase().includes(normalizedQuery) : true));
+  }, [query, tasks]);
+
+  const groupedTasks = useMemo(() => {
+    const grouped: Record<PriorityBucket, TaskItem[]> = {
+      critical: [],
+      high: [],
+      medium: [],
+      low: [],
+    };
+
+    filteredOpenTasks.forEach((task) => {
+      grouped[taskBucket(task, todayKey)].push(task);
+    });
+
+    bucketOrder.forEach((bucket) => {
+      grouped[bucket] = sortPriorityTasks(grouped[bucket]);
+    });
+
+    return grouped;
+  }, [filteredOpenTasks, todayKey]);
 
   const scheduledMinutes = useMemo(
-    () => dayItems.reduce((sum, task) => sum + task.duration, 0),
-    [dayItems],
+    () => weekTasks.filter((task) => !task.done).reduce((sum, task) => sum + task.duration, 0),
+    [weekTasks],
   );
 
-  const completionCount = useMemo(
-    () => tasks.filter((task) => task.done).length,
-    [tasks],
+  const weeklyFocusMinutes = useMemo(
+    () => weekTasks.filter((task) => !task.done && task.type === 'focus').reduce((sum, task) => sum + task.duration, 0),
+    [weekTasks],
   );
+
+  const weeklyTaskMinutes = useMemo(
+    () => weekTasks.filter((task) => !task.done && task.type === 'task').reduce((sum, task) => sum + task.duration, 0),
+    [weekTasks],
+  );
+
+  const weeklyBufferMinutes = useMemo(
+    () => weekTasks.filter((task) => !task.done && task.type === 'buffer').reduce((sum, task) => sum + task.duration, 0),
+    [weekTasks],
+  );
+
+  const completionRate = useMemo(() => {
+    if (tasks.length === 0) return 0;
+    return Math.round((tasks.filter((task) => task.done).length / tasks.length) * 100);
+  }, [tasks]);
+
+  const capacityMinutes = 7 * 12 * 60;
+  const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
@@ -153,8 +275,8 @@ export default function App() {
     if (!supabase) {
       return true;
     }
-    const client = supabase;
 
+    const client = supabase;
     const changed = nextTasks.filter((task) => {
       const previous = previousTasks.find((entry) => entry.id === task.id);
       return previous && (previous.scheduled_date !== task.scheduled_date || previous.start_minutes !== task.start_minutes);
@@ -194,7 +316,7 @@ export default function App() {
     );
 
     if (!placement) {
-      setStatusMessage('No open slot was found in the current auto-placement window.');
+      setStatusMessage('No open slot was found in the current scheduling window.');
       return;
     }
 
@@ -213,6 +335,7 @@ export default function App() {
 
     setTasks((prev) => sortTasksChronologically([...prev, item]));
     focusDate(item.scheduled_date);
+    setView('planner');
     setStatusMessage(
       `${item.title} placed on ${formatDate(item.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} at ${formatTime(
         item.start_minutes,
@@ -293,7 +416,7 @@ export default function App() {
     );
   };
 
-  const handleCalendarDrop = async (event: DragEvent<HTMLDivElement>) => {
+  const handleBoardDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const taskId = event.dataTransfer.getData('text/task-id') || draggedTaskId;
     if (!taskId) {
@@ -306,25 +429,11 @@ export default function App() {
     }
 
     const bounds = event.currentTarget.getBoundingClientRect();
-    const offsetY = event.clientY - bounds.top;
-    const startMinutes = clampStart(offsetY / PIXELS_PER_MINUTE, task.duration);
-    await moveTask(taskId, selectedDate, startMinutes);
-    setDraggedTaskId(null);
-  };
-
-  const handleDayDrop = async (event: DragEvent<HTMLButtonElement>, dateKey: string) => {
-    event.preventDefault();
-    const taskId = event.dataTransfer.getData('text/task-id') || draggedTaskId;
-    if (!taskId) {
-      return;
-    }
-
-    const task = tasks.find((entry) => entry.id === taskId);
-    if (!task) {
-      return;
-    }
-
-    await moveTask(taskId, dateKey, task.start_minutes);
+    const relativeX = event.clientX - bounds.left - TIME_GUTTER;
+    const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
+    const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
+    const startMinutes = clampStart(((event.clientY - bounds.top) / PIXELS_PER_MINUTE) + VISIBLE_START_MINUTES, task.duration);
+    await moveTask(taskId, weekDates[dayIndex], startMinutes);
     setDraggedTaskId(null);
   };
 
@@ -342,229 +451,395 @@ export default function App() {
     await persistBatchPositions(result.tasks, previousTasks);
   };
 
-  return (
-    <main className="planner-shell">
-      <section className="planner-topbar">
-        <div>
-          <p className="eyebrow">GoodCalendar</p>
-          <h1>{formatDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</h1>
-          <p className="subtle-copy">
-            {dayItems.length} items scheduled, {Math.round(scheduledMinutes / 60 * 10) / 10} hours booked, {completionCount} completed overall.
-          </p>
-        </div>
-        <div className="topbar-status">
+  const renderPriorityCard = (task: TaskItem, compact = false) => (
+    <article
+      key={task.id}
+      className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}`}
+      onClick={() => {
+        focusDate(task.scheduled_date);
+        setView('planner');
+      }}
+    >
+      <div className="priority-card__accent" />
+      <div className="priority-card__content">
+        <div className="priority-card__top">
           <div>
-            <strong>{loading ? 'Syncing…' : hasSupabaseConfig ? 'Supabase live' : 'Local mode'}</strong>
-            <p>{syncMessage}</p>
+            <span className="priority-card__group">{taskTypeLabel(task.type)}</span>
+            <strong>{task.title}</strong>
           </div>
-          <button type="button" className="secondary-btn" onClick={() => focusDate(todayKey)}>
-            Today
+          <button
+            type="button"
+            className="icon-btn subtle"
+            onClick={(event) => {
+              event.stopPropagation();
+              void toggleTask(task.id);
+            }}
+          >
+            {task.done ? 'Undo' : 'Done'}
           </button>
         </div>
-      </section>
+        <p>
+          {formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · {formatRange(task.start_minutes, task.duration)}
+        </p>
+        <div className="priority-card__meta">
+          <span>{task.priority} priority</span>
+          <span>{task.duration} mins</span>
+          {task.deadline ? <span>due {formatDate(task.deadline, { month: 'short', day: 'numeric' })}</span> : null}
+        </div>
+      </div>
+    </article>
+  );
 
-      <section className="week-nav">
-        <div className="week-nav__header">
-          <button type="button" className="secondary-btn" onClick={() => shiftWeek(-7)}>
-            Previous
-          </button>
-          <strong>{formatDate(toDateKey(weekStart), { month: 'long', day: 'numeric' })} week</strong>
-          <button type="button" className="secondary-btn" onClick={() => shiftWeek(7)}>
-            Next
-          </button>
+  return (
+    <div className="reclaim-shell">
+      <aside className="reclaim-sidebar">
+        <div className="brand">
+          <div className="brand__mark">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div>
+            <strong>goodcalendar</strong>
+            <small>planner</small>
+          </div>
         </div>
-        <div className="week-nav__days">
-          {weekDates.map((dateKey) => {
-            const dayCount = tasks.filter((task) => task.scheduled_date === dateKey && !task.done).length;
+
+        <nav className="sidebar-nav">
+          {navPrimary.map((item) => {
+            const Icon = item.icon;
             return (
               <button
-                key={dateKey}
+                key={item.id}
                 type="button"
-                className={`day-chip ${selectedDate === dateKey ? 'active' : ''}`}
-                onClick={() => focusDate(dateKey)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => void handleDayDrop(event, dateKey)}
+                className={`nav-item ${view === item.id ? 'active' : ''}`}
+                onClick={() => setView(item.id)}
               >
-                <span>{formatDate(dateKey, { weekday: 'short' })}</span>
-                <strong>{formatDate(dateKey, { day: 'numeric' })}</strong>
-                <small>{dayCount} open</small>
+                <Icon size={16} />
+                <span>{item.label}</span>
               </button>
             );
           })}
-        </div>
-      </section>
 
-      <section className="planner-grid">
-        <aside className="planner-sidebar">
-          <form className="panel composer-panel" onSubmit={createTask}>
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Quick Add</p>
-                <h2>Auto-place a task</h2>
-              </div>
-              <button type="submit" className="primary-btn">
-                Add task
-              </button>
-            </div>
-
-            <label>
-              Task
-              <input
-                value={draft.title}
-                onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                placeholder="Design review, focus block, buffer…"
-              />
-            </label>
-
-            <div className="field-row">
-              <label>
-                Duration
-                <input
-                  type="number"
-                  min={15}
-                  step={15}
-                  value={draft.duration}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, duration: Number(event.target.value) }))}
-                />
-              </label>
-              <label>
-                Type
-                <select
-                  value={draft.type}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
-                >
-                  <option value="task">Task</option>
-                  <option value="focus">Focus</option>
-                  <option value="buffer">Buffer</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="field-row">
-              <label>
-                Priority
-                <select
-                  value={draft.priority}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))}
-                >
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                </select>
-              </label>
-              <label>
-                Deadline
-                <input
-                  type="date"
-                  value={draft.deadline}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <p className="helper-text">
-              New items start from the selected day and snap into the next free opening. If the day is blocked, the planner rolls forward and warns if it had to place after the deadline.
-            </p>
-          </form>
-
-          <section className="panel action-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Automation</p>
-                <h2>Repack the day</h2>
-              </div>
-              <button type="button" className="secondary-btn" onClick={() => void handleAutoPlaceDay()}>
-                Auto-place day
-              </button>
-            </div>
-            <p className="helper-text">{statusMessage}</p>
-          </section>
-
-          <section className="panel warnings-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Deadline Warnings</p>
-                <h2>Priority-aware alerts</h2>
-              </div>
-            </div>
-            {warnings.length === 0 ? (
-              <p className="empty-copy">No deadline or conflict warnings right now.</p>
-            ) : (
-              <div className="warning-list">
-                {warnings.map((warning) => (
-                  <article key={warning.id} className={`warning-card ${warning.severity}`}>
-                    <strong>{warning.title}</strong>
-                    <p>{warning.detail}</p>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        </aside>
-
-        <section className="panel calendar-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Daily Calendar</p>
-              <h2>Drag and drop to reschedule</h2>
-            </div>
-            <p className="helper-text">Drop onto the time grid or onto another day chip above.</p>
-          </div>
-
-          <div
-            className="calendar-grid"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => void handleCalendarDrop(event)}
-          >
-            {hourMarkers.map((marker) => (
-              <div key={marker} className="hour-row" style={{ top: `${marker * PIXELS_PER_MINUTE}px` }}>
-                <span>{formatTime(marker)}</span>
-                <div />
-              </div>
-            ))}
-
-            {dayItems.map((item) => (
-              <article
-                key={item.id}
-                className={`calendar-item ${item.type} priority-${item.priority} ${item.done ? 'done' : ''}`}
-                style={{
-                  top: `${item.start_minutes * PIXELS_PER_MINUTE}px`,
-                  height: `${Math.max(item.duration * PIXELS_PER_MINUTE, 44)}px`,
-                }}
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData('text/task-id', item.id);
-                  setDraggedTaskId(item.id);
-                }}
-                onDragEnd={() => setDraggedTaskId(null)}
-              >
-                <div className="calendar-item__header">
-                  <div>
-                    <strong>{item.title}</strong>
-                    <p>{formatRange(item.start_minutes, item.duration)}</p>
+          {navSecondary.map((item) => {
+            const Icon = item.icon;
+            return (
+              <div key={item.label} className="nav-group">
+                <div className="nav-item static">
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                  {item.children ? <ChevronDown size={14} /> : null}
+                </div>
+                {item.children ? (
+                  <div className="nav-children">
+                    {item.children.map((child) => (
+                      <div key={child} className="nav-child">
+                        {child}
+                      </div>
+                    ))}
                   </div>
-                  <button type="button" className="toggle-btn" onClick={() => void toggleTask(item.id)}>
-                    {item.done ? 'Reopen' : 'Done'}
+                ) : null}
+              </div>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <main className="workspace">
+        <div className="workspace-banner">
+          <span>Priority-aware planning with drag-and-drop scheduling and automatic placement.</span>
+          <button type="button" className="banner-pill">
+            {loading ? 'Syncing' : hasSupabaseConfig ? 'Supabase live' : 'Local mode'}
+          </button>
+        </div>
+
+        <header className="workspace-header">
+          <div>
+            <h1>{view === 'planner' ? 'Planner' : 'Priorities'}</h1>
+            <p>{statusMessage}</p>
+          </div>
+          <div className="header-actions">
+            <button type="button" className="ghost-btn" onClick={() => void handleAutoPlaceDay()}>
+              Find a time
+            </button>
+            <button type="button" className="ghost-btn" onClick={() => focusDate(todayKey)}>
+              Today
+            </button>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => {
+                setView('planner');
+                setRailTab('tasks');
+              }}
+            >
+              <Plus size={16} />
+              New Task
+            </button>
+          </div>
+        </header>
+
+        {view === 'planner' ? (
+          <section className="planner-view">
+            <div className="planner-main">
+              <section className="planner-surface">
+                <div className="planner-surface__header">
+                  <div>
+                    <h2>{formatDate(weekDates[0], { month: 'long', year: 'numeric' })}</h2>
+                    <p>{syncMessage}</p>
+                  </div>
+                  <div className="surface-actions">
+                    <button type="button" className="icon-btn" onClick={() => shiftWeek(-7)}>
+                      <ChevronLeft size={16} />
+                    </button>
+                    <button type="button" className="icon-btn" onClick={() => shiftWeek(7)}>
+                      <ChevronRight size={16} />
+                    </button>
+                    <button type="button" className="icon-btn">
+                      <CircleHelp size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="focus-strip">
+                  <div className="focus-strip__bar">
+                    <span style={{ width: `${(weeklyFocusMinutes / capacityMinutes) * 100}%` }} className="focus-segment focus" />
+                    <span style={{ width: `${(weeklyTaskMinutes / capacityMinutes) * 100}%` }} className="focus-segment task" />
+                    <span style={{ width: `${(weeklyBufferMinutes / capacityMinutes) * 100}%` }} className="focus-segment buffer" />
+                    <span style={{ width: `${(freeMinutes / capacityMinutes) * 100}%` }} className="focus-segment free" />
+                  </div>
+                  <div className="focus-strip__legend">
+                    <span><i className="focus" /> Focus target {Math.round(weeklyFocusMinutes / 60)}h</span>
+                    <span><i className="task" /> Tasks {Math.round(weeklyTaskMinutes / 60)}h</span>
+                    <span><i className="buffer" /> Buffers {Math.round(weeklyBufferMinutes / 60)}h</span>
+                    <span><i className="free" /> Free {Math.round(freeMinutes / 60)}h</span>
+                  </div>
+                </div>
+
+                <div className="week-board">
+                  <div className="week-board__header">
+                    <div className="timezone-chip">GMT+8</div>
+                    {weekDates.map((dateKey) => (
+                      <button
+                        key={dateKey}
+                        type="button"
+                        className={`week-day ${selectedDate === dateKey ? 'active' : ''}`}
+                        onClick={() => focusDate(dateKey)}
+                      >
+                        <span>{formatDate(dateKey, { weekday: 'short' })}</span>
+                        <strong>{formatDate(dateKey, { day: 'numeric' })}</strong>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div
+                    className="week-board__body"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => void handleBoardDrop(event)}
+                  >
+                    <div className="week-board__columns">
+                      {weekDates.map((dateKey) => (
+                        <div key={dateKey} className={`week-column ${selectedDate === dateKey ? 'active' : ''}`} />
+                      ))}
+                    </div>
+
+                    {hourMarkers.map((marker) => (
+                      <div key={marker} className="hour-line" style={{ top: `${(marker - VISIBLE_START_MINUTES) * PIXELS_PER_MINUTE}px` }}>
+                        <span>{formatTime(marker)}</span>
+                        <div />
+                      </div>
+                    ))}
+
+                    {weekTasks.map((task) => {
+                      const dayIndex = weekDates.indexOf(task.scheduled_date);
+                      if (dayIndex === -1) return null;
+                      return (
+                        <article
+                          key={task.id}
+                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''}`}
+                          style={{
+                            top: `${(task.start_minutes - VISIBLE_START_MINUTES) * PIXELS_PER_MINUTE}px`,
+                            left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
+                            width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
+                            height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
+                          }}
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('text/task-id', task.id);
+                            setDraggedTaskId(task.id);
+                          }}
+                          onDragEnd={() => setDraggedTaskId(null)}
+                        >
+                          <strong>{task.title}</strong>
+                          <p>{formatRange(task.start_minutes, task.duration)}</p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside className="planner-rail">
+              <section className="rail-panel rail-panel--composer">
+                <div className="rail-heading">
+                  <strong>New task</strong>
+                  <span>{formatDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                </div>
+                <form className="task-form" onSubmit={createTask}>
+                  <input
+                    value={draft.title}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Search or create a task…"
+                  />
+                  <div className="task-form__row">
+                    <select
+                      value={draft.priority}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))}
+                    >
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                    <select
+                      value={draft.type}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
+                    >
+                      <option value="task">Task</option>
+                      <option value="focus">Focus</option>
+                      <option value="buffer">Buffer</option>
+                    </select>
+                  </div>
+                  <div className="task-form__row">
+                    <input
+                      type="number"
+                      min={15}
+                      step={15}
+                      value={draft.duration}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, duration: Number(event.target.value) }))}
+                    />
+                    <input
+                      type="date"
+                      value={draft.deadline}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
+                    />
+                  </div>
+                  <button type="submit" className="primary-btn wide">
+                    Add task
+                  </button>
+                </form>
+              </section>
+
+              <section className="rail-panel">
+                <div className="rail-tabs">
+                  <button type="button" className={railTab === 'priorities' ? 'active' : ''} onClick={() => setRailTab('priorities')}>
+                    Priorities
+                  </button>
+                  <button type="button" className={railTab === 'tasks' ? 'active' : ''} onClick={() => setRailTab('tasks')}>
+                    Tasks
                   </button>
                 </div>
-                <div className="calendar-item__meta">
-                  <span>{item.type}</span>
-                  <span>{item.priority} priority</span>
-                  {item.deadline ? <span>due {formatDate(item.deadline, { month: 'short', day: 'numeric' })}</span> : null}
-                </div>
-                {item.deadline && item.scheduled_date > item.deadline ? <small>Scheduled after deadline</small> : null}
-              </article>
-            ))}
 
-            {dayItems.length === 0 ? (
-              <div className="calendar-empty">
-                <strong>No tasks scheduled for this day.</strong>
-                <p>Add a task on the left and it will auto-place into the next available slot.</p>
+                <label className="search-field">
+                  <Search size={15} />
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for something…" />
+                </label>
+
+                {warnings.length > 0 ? (
+                  <div className="warning-stack">
+                    {warnings.slice(0, 3).map((warning) => (
+                      <article key={warning.id} className={`warning-pill ${warning.severity}`}>
+                        <strong>{warning.title}</strong>
+                        <p>{warning.detail}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+
+                {railTab === 'priorities' ? (
+                  <div className="priority-groups compact">
+                    {bucketOrder.map((bucket) => (
+                      <section key={bucket} className="priority-group">
+                        <div className="priority-group__header">
+                          <span>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</span>
+                          <small>{groupedTasks[bucket].length || 'No items'}</small>
+                        </div>
+                        {groupedTasks[bucket].length === 0 ? (
+                          <p className="empty-note">No items</p>
+                        ) : (
+                          groupedTasks[bucket].slice(0, 4).map((task) => renderPriorityCard(task, true))
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="task-list">
+                    {selectedDayItems.length === 0 ? (
+                      <p className="empty-note">No tasks scheduled for this day.</p>
+                    ) : (
+                      selectedDayItems.map((task) => (
+                        <article key={task.id} className="scheduled-item">
+                          <div>
+                            <strong>{task.title}</strong>
+                            <p>{formatRange(task.start_minutes, task.duration)}</p>
+                          </div>
+                          <button type="button" className="icon-btn subtle" onClick={() => void toggleTask(task.id)}>
+                            {task.done ? 'Undo' : 'Done'}
+                          </button>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                )}
+              </section>
+            </aside>
+          </section>
+        ) : (
+          <section className="priorities-view">
+            <div className="priorities-toolbar">
+              <label className="search-field wide">
+                <Search size={15} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for something…" />
+              </label>
+              <div className="toolbar-links">
+                <button type="button" className="ghost-link">Filter</button>
+                <button type="button" className="ghost-link">Columns</button>
+                <button type="button" className="ghost-link">Help</button>
               </div>
-            ) : null}
+            </div>
+
+            <div className="priority-board">
+              {bucketOrder.map((bucket) => (
+                <section key={bucket} className="priority-column">
+                  <div className="priority-column__header">
+                    <strong>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</strong>
+                    <span>{groupedTasks[bucket].length ? `${groupedTasks[bucket].length} item${groupedTasks[bucket].length > 1 ? 's' : ''}` : 'No items'}</span>
+                  </div>
+                  {groupedTasks[bucket].length === 0 ? (
+                    <p className="empty-note">No items</p>
+                  ) : (
+                    groupedTasks[bucket].map((task) => renderPriorityCard(task))
+                  )}
+                </section>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <footer className="workspace-footer">
+          <div className="footer-status">
+            <span className={`status-dot ${hasSupabaseConfig ? 'online' : 'offline'}`} />
+            <span>{loading ? 'Loading schedule…' : syncMessage}</span>
           </div>
-        </section>
-      </section>
-    </main>
+          <div className="footer-metrics">
+            <span>{Math.round(weeklyFocusMinutes / 60)}h focus</span>
+            <span>{completionRate}% complete</span>
+            <button type="button" className="ghost-link">
+              <MoreHorizontal size={16} />
+            </button>
+          </div>
+        </footer>
+      </main>
+    </div>
   );
 }
