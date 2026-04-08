@@ -153,6 +153,7 @@ export default function App() {
     if (!supabase) {
       return true;
     }
+    const client = supabase;
 
     const changed = nextTasks.filter((task) => {
       const previous = previousTasks.find((entry) => entry.id === task.id);
@@ -161,7 +162,7 @@ export default function App() {
 
     const results = await Promise.all(
       changed.map((task) =>
-        supabase
+        client
           .from('schedule_items')
           .update({ scheduled_date: task.scheduled_date, start_minutes: task.start_minutes })
           .eq('id', task.id),
