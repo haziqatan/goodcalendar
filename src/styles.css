@@ -339,6 +339,7 @@ button {
 
 .planner-surface {
   padding: 14px;
+  overflow: hidden;
 }
 
 .planner-surface__header,
@@ -416,11 +417,13 @@ button {
 
 .week-board {
   border-top: 1px solid var(--line);
+  display: grid;
+  min-height: 0;
 }
 
 .week-board__header {
   display: grid;
-  grid-template-columns: 72px repeat(7, minmax(0, 1fr));
+  grid-template-columns: 80px repeat(7, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
 }
 
@@ -456,15 +459,18 @@ button {
   position: relative;
   min-height: calc(840px * 1.05);
   height: calc(840px * 1.05);
-  overflow: hidden;
+  max-height: min(72vh, 980px);
+  overflow-y: auto;
+  overflow-x: hidden;
   background:
-    linear-gradient(90deg, transparent 72px, rgba(98, 111, 139, 0.05) 72px),
+    linear-gradient(90deg, transparent 80px, rgba(98, 111, 139, 0.05) 80px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.1));
+  scrollbar-gutter: stable;
 }
 
 .week-board__columns {
   position: absolute;
-  inset: 0 0 0 72px;
+  inset: 0 0 0 80px;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
@@ -482,16 +488,18 @@ button {
   left: 0;
   right: 0;
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 80px 1fr;
   align-items: start;
 }
 
 .hour-line span {
   position: relative;
-  top: -9px;
-  padding-right: 10px;
+  top: -10px;
+  padding-right: 12px;
   text-align: right;
-  font-size: 0.8rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  text-transform: lowercase;
 }
 
 .hour-line div {
@@ -501,11 +509,13 @@ button {
 
 .week-task {
   position: absolute;
-  padding: 8px 8px 7px;
-  border-radius: 4px;
+  padding: 10px 10px 9px;
+  border-radius: 10px;
   border: 1px solid transparent;
   overflow: hidden;
   box-shadow: 0 10px 18px rgba(42, 62, 99, 0.08);
+  display: grid;
+  gap: 4px;
 }
 
 .week-task strong,
@@ -514,11 +524,18 @@ button {
   font-weight: 600;
 }
 
+.week-task strong {
+  display: block;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
 .week-task p,
 .priority-card__group,
 .priority-card__meta span {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  line-height: 1.3;
 }
 
 .week-task.type-task {
@@ -551,7 +568,7 @@ button {
 }
 
 .rail-panel {
-  padding: 14px;
+  padding: 16px;
 }
 
 .search-field {
@@ -691,7 +708,7 @@ button {
 }
 
 .priority-card__content {
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 .priority-card__top {
@@ -722,7 +739,8 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-soft);
-  padding: 10px 12px;
+  padding: 12px 14px;
+  align-items: start;
 }
 
 .priorities-view {
@@ -830,7 +848,7 @@ button {
 
 .task-modal__form {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
 .task-modal__title strong {
@@ -855,8 +873,9 @@ button {
 }
 
 .task-title-field input,
-.preset-row input,
-.preset-row select,
+.preset-card input,
+.preset-range-row input,
+.preset-range-row select,
 .modal-card input,
 .modal-card select,
 .notes-card textarea {
@@ -868,7 +887,7 @@ button {
 }
 
 .task-title-field input {
-  font-size: 1.85rem;
+  font-size: 1.65rem;
   line-height: 1.1;
 }
 
@@ -917,6 +936,12 @@ button {
 .priority-pill.active.high {
   background: rgba(235, 125, 115, 0.16);
   border-color: rgba(235, 125, 115, 0.42);
+}
+
+.priority-pill.active.critical {
+  background: rgba(235, 125, 115, 0.18);
+  border-color: rgba(180, 68, 68, 0.55);
+  color: #8f1f1f;
 }
 
 .priority-pill.active.medium {
@@ -983,7 +1008,7 @@ button {
 
 .hours-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
@@ -1004,7 +1029,7 @@ button {
 }
 
 .hours-card__actions select {
-  min-width: 180px;
+  min-width: 220px;
 }
 
 .helper-card {
@@ -1034,22 +1059,66 @@ button {
 
 .preset-list {
   display: grid;
+  gap: 14px;
+}
+
+.preset-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.preset-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preset-card__header input {
+  flex: 1;
+}
+
+.preset-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.preset-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.preset-ranges {
+  display: grid;
   gap: 10px;
 }
 
-.preset-row {
+.preset-range-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) 140px 140px auto;
+  grid-template-columns: 80px 140px 140px auto;
   gap: 10px;
   align-items: center;
 }
 
-.preset-row input,
-.preset-row select {
+.preset-card input,
+.preset-range-row input,
+.preset-range-row select {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-soft);
+}
+
+.preset-range-row span {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .preset-kind {
@@ -1083,7 +1152,7 @@ button {
   }
 
   .week-board__body {
-    overflow: auto;
+    max-height: none;
   }
 
   .priority-board {
@@ -1106,7 +1175,7 @@ button {
   }
 
   .modal-grid,
-  .preset-row {
+  .preset-range-row {
     grid-template-columns: 1fr;
   }
 
@@ -1117,6 +1186,7 @@ button {
 
   .hours-card,
   .modal-card--duration,
+  .preset-card__header,
   .settings-modal__actions {
     flex-direction: column;
     align-items: stretch;

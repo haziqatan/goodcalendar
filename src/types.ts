@@ -1,6 +1,11 @@
 export type TaskType = 'task' | 'focus' | 'buffer';
-export type TaskPriority = 'low' | 'medium' | 'high';
+export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 export type WarningSeverity = 'critical' | 'warning' | 'notice';
+
+export interface TimeRange {
+  start_minutes: number;
+  end_minutes: number;
+}
 
 export interface TaskItem {
   id: string;
@@ -14,6 +19,7 @@ export interface TaskItem {
   hour_preset?: string;
   hours_start?: number;
   hours_end?: number;
+  hours_ranges?: TimeRange[];
   schedule_after?: string;
   deadline?: string;
   scheduled_date: string;
@@ -31,6 +37,7 @@ export interface ScheduleBlock {
   duration: number;
   scheduled_date: string;
   start_minutes: number;
+  hours_ranges?: TimeRange[];
   deadline?: string;
   done: boolean;
   is_split_segment: boolean;

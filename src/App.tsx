@@ -32,15 +32,17 @@ import {
   findConflict,
   findPlacement,
   formatDate,
-  formatRange,
+  formatDisplayRange,
+  formatDisplayTime,
   formatTime,
   fromDateKey,
   isFlexibleTask,
+  isWithinTaskWindows,
   sortTasksChronologically,
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType } from './types';
+import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -50,8 +52,7 @@ type PresetKind = 'working' | 'personal' | 'custom';
 interface HourPreset {
   id: string;
   name: string;
-  start_minutes: number;
-  end_minutes: number;
+  ranges: TimeRange[];
   kind: PresetKind;
 }
 
@@ -70,12 +71,27 @@ interface TaskDraft {
 }
 
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
-const TIME_GUTTER = 72;
+const TIME_GUTTER = 80;
 const EMOJI_OPTIONS = ['😀', '🚀', '🧠', '🍱', '📞', '✍️'];
 const DURATION_STEP = 15;
 const DEFAULT_HOUR_PRESETS: HourPreset[] = [
-  { id: 'working-hours', name: 'Working Hours', start_minutes: 8 * 60, end_minutes: 18 * 60, kind: 'working' },
-  { id: 'personal-hours', name: 'Personal Hours', start_minutes: 18 * 60, end_minutes: 22 * 60, kind: 'personal' },
+  {
+    id: 'working-hours',
+    name: 'Working Hours',
+    ranges: [
+      { start_minutes: 8 * 60, end_minutes: 13 * 60 },
+      { start_minutes: 14 * 60, end_minutes: 18 * 60 },
+    ],
+    kind: 'working',
+  },
+  {
+    id: 'personal-hours',
+    name: 'Personal Hours',
+    ranges: [
+      { start_minutes: 18 * 60, end_minutes: 22 * 60 },
+    ],
+    kind: 'personal',
+  },
 ];
 
 const starterTasks: TaskItem[] = [
@@ -90,6 +106,10 @@ const starterTasks: TaskItem[] = [
     hour_preset: 'Working Hours',
     hours_start: 8 * 60,
     hours_end: 18 * 60,
+    hours_ranges: [
+      { start_minutes: 8 * 60, end_minutes: 13 * 60 },
+      { start_minutes: 14 * 60, end_minutes: 18 * 60 },
+    ],
     schedule_after: toDateKey(new Date()),
     deadline: addDays(toDateKey(new Date()), 1),
     scheduled_date: toDateKey(new Date()),
@@ -106,6 +126,10 @@ const starterTasks: TaskItem[] = [
     hour_preset: 'Working Hours',
     hours_start: 8 * 60,
     hours_end: 18 * 60,
+    hours_ranges: [
+      { start_minutes: 8 * 60, end_minutes: 13 * 60 },
+      { start_minutes: 14 * 60, end_minutes: 18 * 60 },
+    ],
     schedule_after: toDateKey(new Date()),
     deadline: toDateKey(new Date()),
     scheduled_date: toDateKey(new Date()),
@@ -123,6 +147,10 @@ const starterTasks: TaskItem[] = [
     hour_preset: 'Working Hours',
     hours_start: 8 * 60,
     hours_end: 18 * 60,
+    hours_ranges: [
+      { start_minutes: 8 * 60, end_minutes: 13 * 60 },
+      { start_minutes: 14 * 60, end_minutes: 18 * 60 },
+    ],
     schedule_after: addDays(toDateKey(new Date()), 1),
     deadline: addDays(toDateKey(new Date()), 2),
     scheduled_date: addDays(toDateKey(new Date()), 1),
@@ -146,14 +174,81 @@ const navSecondary = [
 
 const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
 
+function normalizeRanges(ranges?: Array<Partial<TimeRange> | null | undefined>) {
+  const normalized = (ranges ?? [])
+    .map((range) => ({
+      start_minutes: Math.max(0, Math.min(24 * 60, Math.round((range?.start_minutes ?? 0) / DURATION_STEP) * DURATION_STEP)),
+      end_minutes: Math.max(0, Math.min(24 * 60, Math.round((range?.end_minutes ?? 0) / DURATION_STEP) * DURATION_STEP)),
+    }))
+    .filter((range) => range.end_minutes > range.start_minutes)
+    .sort((left, right) => left.start_minutes - right.start_minutes);
+
+  return normalized.length > 0
+    ? normalized
+    : [{ start_minutes: AUTO_START_MINUTES, end_minutes: AUTO_END_MINUTES }];
+}
+
+function rangeBounds(ranges?: Array<Partial<TimeRange> | null | undefined>) {
+  const normalized = normalizeRanges(ranges);
+  return {
+    start_minutes: normalized[0].start_minutes,
+    end_minutes: normalized[normalized.length - 1].end_minutes,
+  };
+}
+
+function normalizePreset(preset: Partial<HourPreset> & { id: string; name?: string; kind?: PresetKind; start_minutes?: number; end_minutes?: number }) {
+  const fallbackRanges =
+    preset.ranges && preset.ranges.length > 0
+      ? preset.ranges
+      : [{ start_minutes: preset.start_minutes ?? AUTO_START_MINUTES, end_minutes: preset.end_minutes ?? AUTO_END_MINUTES }];
+
+  return {
+    id: preset.id,
+    name: preset.name ?? 'Hours',
+    kind: preset.kind ?? 'custom',
+    ranges: normalizeRanges(fallbackRanges),
+  } satisfies HourPreset;
+}
+
+function presetSummary(preset: HourPreset) {
+  return preset.ranges.map((range) => formatDisplayRange(range.start_minutes, range.end_minutes - range.start_minutes)).join(', ');
+}
+
+function rangesMatch(left: TimeRange[] | undefined, right: TimeRange[] | undefined) {
+  const normalizedLeft = normalizeRanges(left);
+  const normalizedRight = normalizeRanges(right);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+
+  return normalizedLeft.every(
+    (range, index) =>
+      range.start_minutes === normalizedRight[index].start_minutes &&
+      range.end_minutes === normalizedRight[index].end_minutes,
+  );
+}
+
 function normalizeTask(task: TaskItem) {
+  const ranges =
+    task.hours_ranges && task.hours_ranges.length > 0
+      ? normalizeRanges(task.hours_ranges)
+      : normalizeRanges([{ start_minutes: task.hours_start, end_minutes: task.hours_end }]);
+  const bounds = rangeBounds(ranges);
+
   return {
     ...task,
     description: task.description ?? '',
+    priority: task.priority ?? 'high',
+    hours_ranges: ranges,
+    hours_start: task.hours_start ?? bounds.start_minutes,
+    hours_end: task.hours_end ?? bounds.end_minutes,
   };
 }
 
 function taskBucket(task: TaskItem, todayKey: string): PriorityBucket {
+  if (task.priority === 'critical') {
+    return 'critical';
+  }
   if (task.deadline && (task.deadline < todayKey || task.scheduled_date > task.deadline)) {
     return 'critical';
   }
@@ -258,10 +353,11 @@ export default function App() {
     try {
       const parsed = JSON.parse(stored) as HourPreset[];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        setHourPresets(parsed);
+        const normalized = parsed.map((preset) => normalizePreset(preset));
+        setHourPresets(normalized);
         setDraft((current) => ({
           ...current,
-          hourPresetId: parsed.some((preset) => preset.id === current.hourPresetId) ? current.hourPresetId : parsed[0].id,
+          hourPresetId: normalized.some((preset) => preset.id === current.hourPresetId) ? current.hourPresetId : normalized[0].id,
         }));
       }
     } catch {
@@ -391,8 +487,8 @@ export default function App() {
   }, [tasks]);
 
   const boardWindow = useMemo(() => {
-    const presetStarts = hourPresets.map((preset) => preset.start_minutes);
-    const presetEnds = hourPresets.map((preset) => preset.end_minutes);
+    const presetStarts = hourPresets.flatMap((preset) => preset.ranges.map((range) => range.start_minutes));
+    const presetEnds = hourPresets.flatMap((preset) => preset.ranges.map((range) => range.end_minutes));
     const taskStarts = weekTasks.map((task) => task.start_minutes);
     const taskEnds = weekTasks.map((task) => task.start_minutes + task.duration);
     const rawStart = Math.min(6 * 60, ...presetStarts, ...(taskStarts.length ? taskStarts : [AUTO_START_MINUTES]));
@@ -408,13 +504,14 @@ export default function App() {
     };
   }, [hourPresets, weekTasks]);
 
-  const capacityMinutes = 7 * (AUTO_END_MINUTES - AUTO_START_MINUTES);
-  const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
-
   const selectedPreset =
     hourPresets.find((preset) => preset.id === draft.hourPresetId) ??
     hourPresets[0] ??
     DEFAULT_HOUR_PRESETS[0];
+
+  const capacitySource = hourPresets.find((preset) => preset.kind === 'working') ?? selectedPreset;
+  const capacityMinutes = 7 * capacitySource.ranges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
+  const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
@@ -437,16 +534,18 @@ export default function App() {
       hourPresets.find(
         (preset) =>
           (task.hour_preset && preset.name === task.hour_preset) ||
-          (preset.start_minutes === task.hours_start && preset.end_minutes === task.hours_end),
+          rangesMatch(preset.ranges, task.hours_ranges),
       )?.id ?? '';
 
     if (!presetId) {
       const id = `custom-${crypto.randomUUID()}`;
+      const ranges = task.hours_ranges && task.hours_ranges.length > 0
+        ? normalizeRanges(task.hours_ranges)
+        : normalizeRanges([{ start_minutes: task.hours_start, end_minutes: task.hours_end }]);
       const customPreset: HourPreset = {
         id,
         name: task.hour_preset || `Custom Hours ${hourPresets.filter((preset) => preset.kind === 'custom').length + 1}`,
-        start_minutes: task.hours_start ?? AUTO_START_MINUTES,
-        end_minutes: task.hours_end ?? AUTO_END_MINUTES,
+        ranges,
         kind: 'custom',
       };
       setHourPresets((prev) => [...prev, customPreset]);
@@ -531,9 +630,11 @@ export default function App() {
       : undefined;
     const scheduleAfter = draft.scheduleAfter || selectedDate;
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
+    const presetRanges = normalizeRanges(preset.ranges);
+    const presetBounds = rangeBounds(presetRanges);
 
-    if (preset.end_minutes <= preset.start_minutes) {
-      setStatusMessage('Selected hours need an end time after the start time.');
+    if (presetRanges.length === 0) {
+      setStatusMessage('Selected hours need at least one valid time range.');
       return;
     }
 
@@ -542,15 +643,16 @@ export default function App() {
       duration,
       deadline: draft.deadline || undefined,
       schedule_after: scheduleAfter,
-      hours_start: preset.start_minutes,
-      hours_end: preset.end_minutes,
+      hours_ranges: presetRanges,
+      hours_start: presetBounds.start_minutes,
+      hours_end: presetBounds.end_minutes,
     };
 
     let placement = findPlacement(
       tasks,
       placementContext,
       existingTask?.scheduled_date ?? selectedDate,
-      existingTask?.start_minutes ?? preset.start_minutes,
+      existingTask?.start_minutes ?? presetBounds.start_minutes,
       editingTaskId ?? undefined,
     );
 
@@ -564,12 +666,13 @@ export default function App() {
       min_duration: normalizedMinDuration,
       max_duration: normalizedMaxDuration,
       hour_preset: preset.name,
-      hours_start: preset.start_minutes,
-      hours_end: preset.end_minutes,
+      hours_start: presetBounds.start_minutes,
+      hours_end: presetBounds.end_minutes,
+      hours_ranges: presetRanges,
       schedule_after: scheduleAfter,
       deadline: draft.deadline || undefined,
       scheduled_date: placement?.scheduled_date ?? (existingTask?.scheduled_date ?? scheduleAfter),
-      start_minutes: placement?.start_minutes ?? (existingTask?.start_minutes ?? preset.start_minutes),
+      start_minutes: placement?.start_minutes ?? (existingTask?.start_minutes ?? presetBounds.start_minutes),
       done: existingTask?.done ?? false,
     };
 
@@ -612,7 +715,7 @@ export default function App() {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
-      })} at ${formatTime(item.start_minutes)}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
+      })} at ${formatDisplayTime(item.start_minutes)}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
     );
 
     if (!supabase) {
@@ -633,6 +736,7 @@ export default function App() {
           hour_preset: item.hour_preset,
           hours_start: item.hours_start,
           hours_end: item.hours_end,
+          hours_ranges: item.hours_ranges,
           schedule_after: item.schedule_after,
           deadline: item.deadline,
           scheduled_date: item.scheduled_date,
@@ -675,10 +779,7 @@ export default function App() {
     const previousTasks = tasks;
     const desiredStart = clampStart(startMinutes, task.duration);
     const collision = findConflict(tasks, dateKey, desiredStart, task.duration, task.id);
-    const outsideWindow =
-      Boolean(task.schedule_after && dateKey < task.schedule_after) ||
-      Boolean(task.hours_start !== undefined && desiredStart < task.hours_start) ||
-      Boolean(task.hours_end !== undefined && desiredStart + task.duration > task.hours_end);
+    const outsideWindow = Boolean(task.schedule_after && dateKey < task.schedule_after) || !isWithinTaskWindows(task, desiredStart, task.duration);
     const placement = collision || outsideWindow
       ? findPlacement(
           tasks,
@@ -686,6 +787,7 @@ export default function App() {
             duration: task.duration,
             deadline: task.deadline,
             schedule_after: task.schedule_after,
+            hours_ranges: task.hours_ranges,
             hours_start: task.hours_start,
             hours_end: task.hours_end,
           },
@@ -716,12 +818,12 @@ export default function App() {
     focusDate(placement.scheduled_date);
     setStatusMessage(
       collision || outsideWindow
-        ? `${task.title} was snapped to ${formatTime(placement.start_minutes)} on ${formatDate(placement.scheduled_date, {
+        ? `${task.title} was snapped to ${formatDisplayTime(placement.start_minutes)} on ${formatDate(placement.scheduled_date, {
             weekday: 'short',
             month: 'short',
             day: 'numeric',
           })} to avoid overlap${placement.afterDeadline ? ', after its deadline window.' : '.'}`
-        : `${task.title} moved to ${formatTime(placement.start_minutes)}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
+        : `${task.title} moved to ${formatDisplayTime(placement.start_minutes)}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
     );
 
     await persistTaskUpdate(
@@ -747,7 +849,10 @@ export default function App() {
     const relativeX = event.clientX - bounds.left - TIME_GUTTER;
     const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
     const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
-    const startMinutes = clampStart(((event.clientY - bounds.top) / PIXELS_PER_MINUTE) + boardWindow.start, task.duration);
+    const startMinutes = clampStart(
+      ((event.clientY - bounds.top + event.currentTarget.scrollTop) / PIXELS_PER_MINUTE) + boardWindow.start,
+      task.duration,
+    );
     await moveTask(taskId, weekDates[dayIndex], startMinutes);
     setDraggedTaskId(null);
   };
@@ -767,14 +872,63 @@ export default function App() {
   };
 
   const updatePreset = (id: string, patch: Partial<HourPreset>) => {
-    setHourPresets((prev) => prev.map((preset) => (preset.id === id ? { ...preset, ...patch } : preset)));
+    setHourPresets((prev) => prev.map((preset) => (preset.id === id ? normalizePreset({ ...preset, ...patch }) : preset)));
+  };
+
+  const updatePresetRange = (presetId: string, rangeIndex: number, patch: Partial<TimeRange>) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) {
+          return preset;
+        }
+
+        const nextRanges = preset.ranges.map((range, index) => (index === rangeIndex ? { ...range, ...patch } : range));
+        return {
+          ...preset,
+          ranges: normalizeRanges(nextRanges),
+        };
+      }),
+    );
+  };
+
+  const addPresetRange = (presetId: string) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) {
+          return preset;
+        }
+
+        const lastRange = preset.ranges[preset.ranges.length - 1] ?? { start_minutes: 9 * 60, end_minutes: 12 * 60 };
+        const nextStart = Math.min(lastRange.end_minutes + DURATION_STEP, 22 * 60);
+        const nextEnd = Math.min(nextStart + 2 * 60, 24 * 60);
+        return { ...preset, ranges: normalizeRanges([...preset.ranges, { start_minutes: nextStart, end_minutes: nextEnd }]) };
+      }),
+    );
+  };
+
+  const deletePresetRange = (presetId: string, rangeIndex: number) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) {
+          return preset;
+        }
+
+        const nextRanges = preset.ranges.filter((_, index) => index !== rangeIndex);
+        return { ...preset, ranges: normalizeRanges(nextRanges.length > 0 ? nextRanges : preset.ranges) };
+      }),
+    );
   };
 
   const addCustomPreset = () => {
     const id = `custom-${crypto.randomUUID()}`;
     setHourPresets((prev) => [
       ...prev,
-      { id, name: `Custom Hours ${prev.filter((preset) => preset.kind === 'custom').length + 1}`, start_minutes: 9 * 60, end_minutes: 17 * 60, kind: 'custom' },
+      normalizePreset({
+        id,
+        name: `Custom Hours ${prev.filter((preset) => preset.kind === 'custom').length + 1}`,
+        ranges: [{ start_minutes: 9 * 60, end_minutes: 17 * 60 }],
+        kind: 'custom',
+      }),
     ]);
     setDraft((prev) => ({ ...prev, hourPresetId: id }));
   };
@@ -795,8 +949,8 @@ export default function App() {
       const taskBlocks = blocksByTaskId.get(task.id) ?? [];
       const nextBlock = taskBlocks[0];
       const scheduleLabel = taskBlocks.length > 1 && nextBlock
-        ? `${taskBlocks.length} blocks · next ${formatDate(nextBlock.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} ${formatTime(nextBlock.start_minutes)}`
-        : `${formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${formatRange(task.start_minutes, task.duration)}`;
+        ? `${taskBlocks.length} blocks · next ${formatDate(nextBlock.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} ${formatDisplayTime(nextBlock.start_minutes)}`
+        : `${formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${formatDisplayRange(task.start_minutes, task.duration)}`;
 
       return (
         <article
@@ -987,7 +1141,7 @@ export default function App() {
 
                     {boardWindow.markers.map((marker) => (
                       <div key={marker} className="hour-line" style={{ top: `${(marker - boardWindow.start) * PIXELS_PER_MINUTE}px` }}>
-                        <span>{formatTime(marker)}</span>
+                        <span>{formatDisplayTime(marker)}</span>
                         <div />
                       </div>
                     ))}
@@ -1020,7 +1174,7 @@ export default function App() {
                           onClick={() => openEditTaskModalById(task.task_id)}
                         >
                           <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
-                          <p>{formatRange(task.start_minutes, task.duration)}</p>
+                          <p>{formatDisplayRange(task.start_minutes, task.duration)}</p>
                         </article>
                       );
                     })}
@@ -1086,7 +1240,7 @@ export default function App() {
                         <article key={task.id} className="scheduled-item" onClick={() => openEditTaskModalById(task.task_id)}>
                           <div>
                             <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
-                            <p>{formatRange(task.start_minutes, task.duration)}</p>
+                            <p>{formatDisplayRange(task.start_minutes, task.duration)}</p>
                           </div>
                           <button
                             type="button"
@@ -1190,7 +1344,7 @@ export default function App() {
               </div>
 
               <div className="priority-row">
-                {(['high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
+                {(['critical', 'high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
                   <button
                     key={priority}
                     type="button"
@@ -1255,7 +1409,7 @@ export default function App() {
                 <div className="hours-card__label">
                   <span>Hours</span>
                   <strong>{selectedPreset.name}</strong>
-                  <small>{formatRange(selectedPreset.start_minutes, selectedPreset.end_minutes - selectedPreset.start_minutes)}</small>
+                  <small>{presetSummary(selectedPreset)}</small>
                 </div>
                 <div className="hours-card__actions">
                   <select
@@ -1309,9 +1463,7 @@ export default function App() {
                 <div className="modal-card helper-card">
                   <span>Will schedule inside</span>
                   <strong>{selectedPreset.name}</strong>
-                  <small>
-                    {formatTime(selectedPreset.start_minutes)} to {formatTime(selectedPreset.end_minutes)}
-                  </small>
+                  <small>{presetSummary(selectedPreset)}</small>
                 </div>
               </div>
 
@@ -1353,28 +1505,52 @@ export default function App() {
 
             <div className="preset-list">
               {hourPresets.map((preset) => (
-                <div key={preset.id} className="preset-row">
-                  <input
-                    value={preset.name}
-                    onChange={(event) => updatePreset(preset.id, { name: event.target.value })}
-                  />
-                  <input
-                    type="time"
-                    value={minutesToTimeInput(preset.start_minutes)}
-                    onChange={(event) => updatePreset(preset.id, { start_minutes: timeInputToMinutes(event.target.value) })}
-                  />
-                  <input
-                    type="time"
-                    value={minutesToTimeInput(preset.end_minutes)}
-                    onChange={(event) => updatePreset(preset.id, { end_minutes: timeInputToMinutes(event.target.value) })}
-                  />
-                  {preset.kind === 'custom' ? (
-                    <button type="button" className="ghost-btn" onClick={() => deletePreset(preset.id)}>
-                      Remove
-                    </button>
-                  ) : (
-                    <span className="preset-kind">{preset.kind}</span>
-                  )}
+                <div key={preset.id} className="preset-card">
+                  <div className="preset-card__header">
+                    <input
+                      value={preset.name}
+                      onChange={(event) => updatePreset(preset.id, { name: event.target.value })}
+                    />
+                    <div className="preset-card__meta">
+                      {preset.kind === 'custom' ? (
+                        <button type="button" className="ghost-btn" onClick={() => deletePreset(preset.id)}>
+                          Remove
+                        </button>
+                      ) : (
+                        <span className="preset-kind">{preset.kind}</span>
+                      )}
+                      <button type="button" className="ghost-btn" onClick={() => addPresetRange(preset.id)}>
+                        <Plus size={16} />
+                        Add range
+                      </button>
+                    </div>
+                  </div>
+                  <p className="preset-summary">{presetSummary(preset)}</p>
+                  <div className="preset-ranges">
+                    {preset.ranges.map((range, index) => (
+                      <div key={`${preset.id}-${index}`} className="preset-range-row">
+                        <span>Range {index + 1}</span>
+                        <input
+                          type="time"
+                          value={minutesToTimeInput(range.start_minutes)}
+                          onChange={(event) => updatePresetRange(preset.id, index, { start_minutes: timeInputToMinutes(event.target.value) })}
+                        />
+                        <input
+                          type="time"
+                          value={minutesToTimeInput(range.end_minutes)}
+                          onChange={(event) => updatePresetRange(preset.id, index, { end_minutes: timeInputToMinutes(event.target.value) })}
+                        />
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => deletePresetRange(preset.id, index)}
+                          disabled={preset.ranges.length === 1}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
