@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent, FormEvent } from 'react';
 import {
   BarChart3,
@@ -70,9 +70,12 @@ interface TaskDraft {
   description: string;
 }
 
+interface EmojiClickDetail {
+  unicode: string;
+}
+
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const TIME_GUTTER = 80;
-const EMOJI_OPTIONS = ['😀', '🚀', '🧠', '🍱', '📞', '✍️'];
 const DURATION_STEP = 15;
 const DEFAULT_HOUR_PRESETS: HourPreset[] = [
   {
@@ -245,13 +248,7 @@ function normalizeTask(task: TaskItem) {
   };
 }
 
-function taskBucket(task: TaskItem, todayKey: string): PriorityBucket {
-  if (task.priority === 'critical') {
-    return 'critical';
-  }
-  if (task.deadline && (task.deadline < todayKey || task.scheduled_date > task.deadline)) {
-    return 'critical';
-  }
+function taskBucket(task: TaskItem, _todayKey: string): PriorityBucket {
   return task.priority;
 }
 
@@ -337,8 +334,12 @@ export default function App() {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [draft, setDraft] = useState<TaskDraft>(buildDraft(todayKey, DEFAULT_HOUR_PRESETS[0].id));
+  const emojiPickerHostRef = useRef<HTMLDivElement | null>(null);
+  const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const emojiPopoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -371,6 +372,64 @@ export default function App() {
     }
     window.localStorage.setItem(HOURS_STORAGE_KEY, JSON.stringify(hourPresets));
   }, [hourPresets]);
+
+  useEffect(() => {
+    if (!showEmojiPicker || !emojiPickerHostRef.current || typeof window === 'undefined') {
+      return;
+    }
+
+    if (!window.customElements.get('emoji-picker')) {
+      return;
+    }
+
+    const host = emojiPickerHostRef.current;
+    host.innerHTML = '';
+    const picker = document.createElement('emoji-picker');
+
+    const handleEmojiClick = (event: Event) => {
+      const detail = (event as CustomEvent<EmojiClickDetail>).detail;
+      const emoji = detail?.unicode;
+      if (!emoji) {
+        return;
+      }
+
+      setDraft((prev) => ({
+        ...prev,
+        title: prev.title ? `${prev.title} ${emoji}` : emoji,
+      }));
+      setShowEmojiPicker(false);
+    };
+
+    picker.addEventListener('emoji-click', handleEmojiClick as EventListener);
+    host.appendChild(picker);
+
+    return () => {
+      picker.removeEventListener('emoji-click', handleEmojiClick as EventListener);
+      host.innerHTML = '';
+    };
+  }, [showEmojiPicker]);
+
+  useEffect(() => {
+    if (!showEmojiPicker) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+
+      if (emojiPopoverRef.current?.contains(target) || emojiTriggerRef.current?.contains(target)) {
+        return;
+      }
+
+      setShowEmojiPicker(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [showEmojiPicker]);
 
   useEffect(() => {
     const load = async () => {
@@ -487,22 +546,16 @@ export default function App() {
   }, [tasks]);
 
   const boardWindow = useMemo(() => {
-    const presetStarts = hourPresets.flatMap((preset) => preset.ranges.map((range) => range.start_minutes));
-    const presetEnds = hourPresets.flatMap((preset) => preset.ranges.map((range) => range.end_minutes));
-    const taskStarts = weekTasks.map((task) => task.start_minutes);
-    const taskEnds = weekTasks.map((task) => task.start_minutes + task.duration);
-    const rawStart = Math.min(6 * 60, ...presetStarts, ...(taskStarts.length ? taskStarts : [AUTO_START_MINUTES]));
-    const rawEnd = Math.max(20 * 60, ...presetEnds, ...(taskEnds.length ? taskEnds : [AUTO_END_MINUTES]));
-    const start = Math.max(0, Math.floor(rawStart / 60) * 60);
-    const end = Math.min(24 * 60, Math.ceil(rawEnd / 60) * 60);
-    const markers = Array.from({ length: Math.max((end - start) / 60 + 1, 1) }, (_, index) => start + index * 60);
+    const start = 0;
+    const end = 24 * 60;
+    const markers = Array.from({ length: 24 }, (_, index) => start + index * 60);
     return {
       start,
       end,
       markers,
-      height: Math.max((end - start) * PIXELS_PER_MINUTE, 640),
+      height: (end - start) * PIXELS_PER_MINUTE,
     };
-  }, [hourPresets, weekTasks]);
+  }, []);
 
   const selectedPreset =
     hourPresets.find((preset) => preset.id === draft.hourPresetId) ??
@@ -527,6 +580,7 @@ export default function App() {
   const closeTaskModal = () => {
     setShowTaskModal(false);
     setEditingTaskId(null);
+    setShowEmojiPicker(false);
   };
 
   const openEditTaskModal = (task: TaskItem) => {
@@ -1346,28 +1400,28 @@ export default function App() {
                 <span>{editingTaskId ? 'Update scheduling details and save changes.' : 'Create a task with scheduling rules and notes.'}</span>
               </div>
               <div className="task-title-field">
-                <SmilePlus size={24} />
+                <button
+                  ref={emojiTriggerRef}
+                  type="button"
+                  className="emoji-trigger"
+                  onClick={() => setShowEmojiPicker((current) => !current)}
+                  aria-label="Open emoji picker"
+                >
+                  <SmilePlus size={24} />
+                </button>
                 <input
                   value={draft.title}
                   onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
                   placeholder="Task name..."
                   autoFocus
                 />
+                {showEmojiPicker ? (
+                  <div ref={emojiPopoverRef} className="emoji-picker-popover">
+                    <div ref={emojiPickerHostRef} className="emoji-picker-host" />
+                  </div>
+                ) : null}
               </div>
               {!draft.title.trim() ? <p className="modal-error">Task title is required</p> : null}
-
-              <div className="emoji-row">
-                {EMOJI_OPTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="emoji-chip"
-                    onClick={() => setDraft((prev) => ({ ...prev, title: prev.title ? `${prev.title} ${emoji}` : emoji }))}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
 
               <div className="priority-row">
                 {(['critical', 'high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
