@@ -82,6 +82,14 @@ interface EmojiClickDetail {
   unicode: string;
 }
 
+interface DropPreview {
+  date: string;
+  startMinutes: number;
+  valid: boolean;
+  duration: number;
+  dayIndex: number;
+}
+
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const BUFFER_SETTINGS_STORAGE_KEY = 'goodcalendar-buffer-settings';
 
@@ -545,6 +553,18 @@ export default function App() {
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiPopoverRef = useRef<HTMLDivElement | null>(null);
   const boardBodyRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    taskId: string;
+    task: TaskItem;
+    clone: HTMLElement | null;
+    sourceEl: HTMLElement;
+    startX: number; startY: number;
+    offsetX: number; offsetY: number;
+    isDragging: boolean;
+  } | null>(null);
+  const dropPreviewRef = useRef<DropPreview | null>(null);
+  const [dropPreview, setDropPreview] = useState<DropPreview | null>(null);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
 
   // Current time in minutes since midnight, updated every 30s for the now-line
   const getNowMinutes = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
@@ -1431,6 +1451,117 @@ export default function App() {
     );
   };
 
+  // ── Pointer-based drag for calendar task cards ───────────────────────────────
+
+  const updateDropPreview = (preview: DropPreview | null) => {
+    const prev = dropPreviewRef.current;
+    if (
+      preview?.date !== prev?.date ||
+      preview?.startMinutes !== prev?.startMinutes ||
+      preview?.valid !== prev?.valid
+    ) {
+      dropPreviewRef.current = preview;
+      setDropPreview(preview);
+    }
+  };
+
+  const computeDropPreview = (clientX: number, clientY: number, task: TaskItem) => {
+    const board = boardBodyRef.current;
+    if (!board) { updateDropPreview(null); return; }
+    const bounds = board.getBoundingClientRect();
+    if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) {
+      updateDropPreview(null);
+      return;
+    }
+    const relativeX = clientX - bounds.left - TIME_GUTTER;
+    const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
+    const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
+    const rawMinutes = (clientY - bounds.top + board.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE + boardWindow.start;
+    const startMinutes = clampStart(rawMinutes, task.duration);
+    const date = weekDates[dayIndex];
+    const conflict = findConflict(tasks, date, startMinutes, task.duration, task.id);
+    const inWindow = isWithinTaskWindows(task, startMinutes, task.duration);
+    updateDropPreview({ date, startMinutes, valid: !conflict && inWindow, duration: task.duration, dayIndex });
+  };
+
+  const handleTaskPointerDown = (event: React.PointerEvent<HTMLElement>, taskId: string, draggable: boolean) => {
+    if (!draggable || event.button !== 0) return;
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    event.preventDefault(); // suppress native drag & text-select
+
+    const sourceEl = event.currentTarget;
+    const rect = sourceEl.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+
+    const state: NonNullable<typeof dragStateRef.current> = {
+      taskId, task, clone: null, sourceEl,
+      startX, startY, offsetX, offsetY, isDragging: false,
+    };
+    dragStateRef.current = state;
+
+    const onMove = (e: PointerEvent) => {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (!state.isDragging) {
+        if (Math.sqrt(dx * dx + dy * dy) < 6) return;
+        state.isDragging = true;
+
+        const clone = sourceEl.cloneNode(true) as HTMLElement;
+        clone.style.cssText = [
+          'position:fixed', 'pointer-events:none', 'z-index:9999',
+          `width:${rect.width}px`, `height:${rect.height}px`,
+          `left:${rect.left}px`, `top:${rect.top}px`,
+          'opacity:0.88', 'transform:scale(1.04) rotate(-0.4deg)',
+          'box-shadow:0 14px 44px rgba(0,0,0,0.22)',
+          'transition:transform 80ms ease,box-shadow 80ms ease',
+          'border-radius:10px', 'will-change:left,top',
+        ].join(';');
+        document.body.appendChild(clone);
+        state.clone = clone;
+        setDraggingTaskId(taskId);
+      }
+
+      if (state.clone) {
+        state.clone.style.left = `${e.clientX - offsetX}px`;
+        state.clone.style.top = `${e.clientY - offsetY}px`;
+      }
+      computeDropPreview(e.clientX, e.clientY, task);
+    };
+
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+
+      if (state.clone) {
+        state.clone.style.transition = 'opacity 120ms ease,transform 120ms ease';
+        state.clone.style.opacity = '0';
+        state.clone.style.transform = 'scale(0.95)';
+        setTimeout(() => state.clone?.remove(), 120);
+      }
+
+      setDraggingTaskId(null);
+
+      if (!state.isDragging) {
+        // Tap without drag → open modal
+        openEditTaskModalById(taskId);
+      } else if (dropPreviewRef.current?.valid) {
+        void moveTask(taskId, dropPreviewRef.current.date, dropPreviewRef.current.startMinutes);
+      }
+
+      dragStateRef.current = null;
+      updateDropPreview(null);
+    };
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
   const handleBoardDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const taskId = event.dataTransfer.getData('text/task-id') || draggedTaskId;
@@ -1762,8 +1893,6 @@ export default function App() {
                   <div
                     ref={boardBodyRef}
                     className="week-board__body"
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => void handleBoardDrop(event)}
                   >
                     <div
                       className="week-board__inner"
@@ -1800,32 +1929,37 @@ export default function App() {
                       );
                     })() : null}
 
+                    {/* Drop indicator ghost */}
+                    {dropPreview ? (
+                      <div
+                        className={`drop-indicator ${dropPreview.valid ? 'valid' : 'invalid'}`}
+                        style={{
+                          top: `${BOARD_TOP_PADDING + (dropPreview.startMinutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
+                          left: `calc(${TIME_GUTTER}px + ${dropPreview.dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 4px)`,
+                          width: `calc((100% - ${TIME_GUTTER}px) / 7 - 8px)`,
+                          height: `${Math.max(dropPreview.duration * PIXELS_PER_MINUTE, 38)}px`,
+                        }}
+                      />
+                    ) : null}
+
                     {weekTasks.map((task) => {
                       const dayIndex = weekDates.indexOf(task.scheduled_date);
                       if (dayIndex === -1) return null;
                       const sourceTask = tasks.find((entry) => entry.id === task.task_id);
                       const draggable = sourceTask ? !isFlexibleTask(sourceTask) : !task.is_split_segment;
+                      const isDragging = draggingTaskId === task.task_id;
                       return (
                         <article
                           key={task.id}
-                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''} ${task.duration <= 30 ? 'compact' : ''}`}
+                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''} ${task.duration <= 30 ? 'compact' : ''} ${isDragging ? 'dragging' : ''}`}
                           style={{
                             top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
                             width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
                             height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
+                            cursor: draggable ? (isDragging ? 'grabbing' : 'grab') : 'default',
                           }}
-                          draggable={draggable}
-                          onDragStart={(event) => {
-                            if (!draggable) {
-                              event.preventDefault();
-                              return;
-                            }
-                            event.dataTransfer.setData('text/task-id', task.task_id);
-                            setDraggedTaskId(task.task_id);
-                          }}
-                          onDragEnd={() => setDraggedTaskId(null)}
-                          onClick={() => openEditTaskModalById(task.task_id)}
+                          onPointerDown={(e) => handleTaskPointerDown(e, task.task_id, draggable)}
                         >
                           <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
                           <p className="task-time">{formatDisplayRange(task.start_minutes, task.duration)}</p>
