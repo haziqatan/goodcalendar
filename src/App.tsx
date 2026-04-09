@@ -1796,7 +1796,7 @@ export default function App() {
                       return (
                         <article
                           key={task.id}
-                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''}`}
+                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''} ${task.duration <= 30 ? 'compact' : ''}`}
                           style={{
                             top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
@@ -1816,7 +1816,7 @@ export default function App() {
                           onClick={() => openEditTaskModalById(task.task_id)}
                         >
                           <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
-                          <p>{formatDisplayRange(task.start_minutes, task.duration)}</p>
+                          <p className="task-time">{formatDisplayRange(task.start_minutes, task.duration)}</p>
                         </article>
                       );
                     })}

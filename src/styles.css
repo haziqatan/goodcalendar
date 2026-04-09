@@ -672,7 +672,7 @@ button {
 
 .week-task {
   position: absolute;
-  padding: 8px 10px 7px;
+  padding: 5px 8px;
   border-radius: 10px;
   border: 1.5px solid transparent;
   overflow: hidden;
@@ -690,7 +690,7 @@ button {
 
 .week-task strong {
   display: block;
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   font-weight: 600;
   line-height: 1.25;
   color: inherit;
@@ -698,7 +698,7 @@ button {
 
 .week-task p {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   line-height: 1.3;
   opacity: 0.75;
 }
@@ -729,6 +729,30 @@ button {
 
 .week-task.done {
   opacity: 0.4;
+}
+
+/* Compact card: ≤30 min — title + time on one line */
+.week-task.compact {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+}
+
+.week-task.compact strong {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.76rem;
+}
+
+.week-task.compact .task-time {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  opacity: 0.75;
+  white-space: nowrap;
 }
 
 /* ─── Rail / sidebar panel ─────────────────────────────────────────────────── */
