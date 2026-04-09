@@ -70,6 +70,7 @@ interface TaskDraft {
   minDuration: number;
   maxDuration: number;
   hourPresetId: string;
+  scheduleAfterMode: 'now' | 'custom';
   scheduleAfter: string;
   deadline: string;
   description: string;
@@ -476,6 +477,7 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     minDuration: 30,
     maxDuration: 120,
     hourPresetId,
+    scheduleAfterMode: 'now',
     scheduleAfter: dateKeyToDatetime(selectedDate, 9, 0),
     deadline: dateKeyToDatetime(selectedDate, 18, 0),
     description: '',
@@ -502,6 +504,7 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     minDuration: task.min_duration ?? Math.min(task.duration, 30),
     maxDuration: task.max_duration ?? Math.max(task.duration, 120),
     hourPresetId,
+    scheduleAfterMode: 'custom',
     scheduleAfter: scheduleAfterDt,
     deadline: deadlineDt,
     description: task.description ?? '',
@@ -541,6 +544,15 @@ export default function App() {
   const emojiPickerHostRef = useRef<HTMLDivElement | null>(null);
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Current time in minutes since midnight, updated every 30s for the now-line
+  const getNowMinutes = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
+  const [nowMinutes, setNowMinutes] = useState(getNowMinutes);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMinutes(getNowMinutes()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -847,12 +859,14 @@ export default function App() {
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
   const calculatedStages = (() => {
-    if (!draft.workflowEnabled || !draft.scheduleAfter) return [] as StagedWorkflowItem[];
-    const totalMinutes = draft.deadline ? minutesBetweenDt(draft.scheduleAfter, draft.deadline) : 0;
+    if (!draft.workflowEnabled) return [] as StagedWorkflowItem[];
+    const previewStartDt = draft.scheduleAfterMode === 'now' ? toDtKey(new Date()) : draft.scheduleAfter;
+    if (!previewStartDt) return [] as StagedWorkflowItem[];
+    const totalMinutes = draft.deadline ? minutesBetweenDt(previewStartDt, draft.deadline) : 0;
     const distributed = totalMinutes > 0
       ? autoDistributeStages(draft.workflowStages, totalMinutes)
       : draft.workflowStages;
-    return calculateStageTimeline(distributed, draft.scheduleAfter);
+    return calculateStageTimeline(distributed, previewStartDt);
   })();
 
   const focusDate = (dateKey: string) => {
@@ -971,8 +985,14 @@ export default function App() {
     const normalizedMaxDuration = draft.flexible
       ? Math.min(Math.max(clampDuration(Math.max(draft.minDuration, draft.maxDuration)), normalizedMinDuration ?? DURATION_STEP), duration)
       : undefined;
+    // Resolve "now" mode: round current time down to nearest 5-minute mark
+    const resolvedScheduleAfterDt = draft.scheduleAfterMode === 'now' ? (() => {
+      const n = new Date();
+      n.setMinutes(Math.floor(n.getMinutes() / 5) * 5, 0, 0);
+      return toDtKey(n);
+    })() : (draft.scheduleAfter || selectedDate);
     // Strip time component — scheduler works with YYYY-MM-DD date keys
-    const scheduleAfter = datetimeToDateKey(draft.scheduleAfter || selectedDate);
+    const scheduleAfter = datetimeToDateKey(resolvedScheduleAfterDt);
     const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
     const presetRanges = normalizeRanges(preset.ranges);
@@ -992,16 +1012,12 @@ export default function App() {
         setStatusMessage('Enable at least one workflow stage.');
         return;
       }
-      if (!draft.scheduleAfter) {
-        setStatusMessage('Set a "Schedule after" date and time to calculate stage timelines.');
-        return;
-      }
       // Use the same auto-distributed timeline shown in the UI
-      const totalMinutes = draft.deadline ? minutesBetweenDt(draft.scheduleAfter, draft.deadline) : 0;
+      const totalMinutes = draft.deadline ? minutesBetweenDt(resolvedScheduleAfterDt, draft.deadline) : 0;
       const distributedStages = totalMinutes > 0
         ? autoDistributeStages(draft.workflowStages, totalMinutes)
         : draft.workflowStages;
-      const stages = calculateStageTimeline(distributedStages, draft.scheduleAfter);
+      const stages = calculateStageTimeline(distributedStages, resolvedScheduleAfterDt);
       const firstEnabled = stages.find((s) => s.enabled);
       if (!firstEnabled?.startDt) {
         setStatusMessage('Could not calculate stage timelines — check Schedule after date.');
@@ -1740,6 +1756,24 @@ export default function App() {
                       </div>
                     ))}
 
+                    {/* Now line — only visible when today is in the current week view */}
+                    {weekDates.includes(todayKey) ? (() => {
+                      const todayIndex = weekDates.indexOf(todayKey);
+                      const top = BOARD_TOP_PADDING + (nowMinutes - boardWindow.start) * PIXELS_PER_MINUTE;
+                      return (
+                        <div
+                          className="now-line"
+                          style={{
+                            top: `${top}px`,
+                            left: `calc(${TIME_GUTTER}px + ${todayIndex} * ((100% - ${TIME_GUTTER}px) / 7))`,
+                            width: `calc((100% - ${TIME_GUTTER}px) / 7)`,
+                          }}
+                        >
+                          <span className="now-dot" />
+                        </div>
+                      );
+                    })() : null}
+
                     {weekTasks.map((task) => {
                       const dayIndex = weekDates.indexOf(task.scheduled_date);
                       if (dayIndex === -1) return null;
@@ -2066,14 +2100,36 @@ export default function App() {
               </div>
 
               <div className="modal-grid">
-                <label className="modal-card">
+                <div className="modal-card">
                   <span>Schedule after</span>
-                  <input
-                    type="datetime-local"
-                    value={draft.scheduleAfter}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, scheduleAfter: event.target.value }))}
-                  />
-                </label>
+                  <div className="schedule-after-row">
+                    <div className="seg-control">
+                      <button
+                        type="button"
+                        className={draft.scheduleAfterMode === 'now' ? 'active' : ''}
+                        onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'now' }))}
+                      >
+                        Now
+                      </button>
+                      <button
+                        type="button"
+                        className={draft.scheduleAfterMode === 'custom' ? 'active' : ''}
+                        onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'custom' }))}
+                      >
+                        Custom
+                      </button>
+                    </div>
+                    {draft.scheduleAfterMode === 'custom' ? (
+                      <input
+                        type="datetime-local"
+                        value={draft.scheduleAfter}
+                        onChange={(event) => setDraft((prev) => ({ ...prev, scheduleAfter: event.target.value }))}
+                      />
+                    ) : (
+                      <span className="now-label">Schedules as soon as possible</span>
+                    )}
+                  </div>
+                </div>
                 <label className="modal-card">
                   <span>Due date &amp; time</span>
                   <input
@@ -2100,7 +2156,7 @@ export default function App() {
 
                 {draft.workflowEnabled ? (
                   <>
-                    {!draft.scheduleAfter ? (
+                    {draft.scheduleAfterMode === 'custom' && !draft.scheduleAfter ? (
                       <p className="workflow-notice">Set a "Schedule after" date above to calculate timelines.</p>
                     ) : (
                       <div className="workflow-stages">
