@@ -4,7 +4,7 @@ export const MINUTES_IN_DAY = 24 * 60;
 export const SNAP_MINUTES = 15;
 export const AUTO_START_MINUTES = 8 * 60;
 export const AUTO_END_MINUTES = 20 * 60;
-export const PIXELS_PER_MINUTE = 1.05;
+export const PIXELS_PER_MINUTE = 1.4;
 const AUTO_LOOKAHEAD_DAYS = 7;
 const DEFAULT_BUFFER_SETTINGS: BufferSettings = {
   before_events: 10,

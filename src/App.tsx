@@ -1749,10 +1749,13 @@ export default function App() {
 
                   <div
                     className="week-board__body"
-                    style={{ height: `${boardWindow.height + BOARD_TOP_PADDING}px` }}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => void handleBoardDrop(event)}
                   >
+                    <div
+                      className="week-board__inner"
+                      style={{ height: `${boardWindow.height + BOARD_TOP_PADDING}px` }}
+                    >
                     <div className="week-board__columns">
                       {weekDates.map((dateKey) => (
                         <div key={dateKey} className={`week-column ${selectedDate === dateKey ? 'active' : ''}`} />
@@ -1816,7 +1819,8 @@ export default function App() {
                         </article>
                       );
                     })}
-                  </div>
+                    </div>{/* week-board__inner */}
+                  </div>{/* week-board__body */}
                 </div>
               </section>
             </div>

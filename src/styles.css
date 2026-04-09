@@ -563,9 +563,6 @@ button {
 }
 
 .week-board__body {
-  position: relative;
-  min-height: calc(840px * 1.05);
-  height: calc(840px * 1.05);
   max-height: min(72vh, 980px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -573,6 +570,11 @@ button {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
+}
+
+.week-board__inner {
+  position: relative;
+  min-height: 100%;
 }
 
 .week-board__columns {
