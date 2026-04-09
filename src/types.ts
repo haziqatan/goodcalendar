@@ -14,6 +14,19 @@ export interface BufferSettings {
   travel_time: number;
 }
 
+export interface WorkflowStage {
+  id: string;
+  name: string;
+  enabled: boolean;
+  days: number;        // auto-suggested (proportional), user-editable; 0.5 = 4 h
+  weight: number;      // relative weight for proportional auto-distribution
+  hourPresetId: string;
+}
+
+export interface WorkflowConfig {
+  stages: WorkflowStage[];
+}
+
 export interface TaskItem {
   id: string;
   title: string;
@@ -32,6 +45,9 @@ export interface TaskItem {
   scheduled_date: string;
   start_minutes: number;
   done: boolean;
+  workflow_config?: WorkflowConfig;
+  workflow_parent_id?: string;
+  workflow_stage_id?: string;
 }
 
 export interface ScheduleBlock {
