@@ -1944,7 +1944,28 @@ export default function App() {
                       />
                     ) : null}
 
-                    {weekTasks.map((task) => {
+                    {/* Done tasks — thin right-edge strip, below active cards */}
+                    {weekTasks.filter((t) => t.done).map((task) => {
+                      const dayIndex = weekDates.indexOf(task.scheduled_date);
+                      if (dayIndex === -1) return null;
+                      return (
+                        <div
+                          key={task.id}
+                          className="week-task-done-strip"
+                          title={`${task.title} (done) · ${formatDisplayRange(task.start_minutes, task.duration)}`}
+                          style={{
+                            top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
+                            left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
+                            width: `calc((100% - ${TIME_GUTTER}px) / 7 - 12px)`,
+                            height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 4)}px`,
+                          }}
+                          onClick={() => openEditTaskModalById(task.task_id)}
+                        />
+                      );
+                    })}
+
+                    {/* Active tasks — full-width cards */}
+                    {weekTasks.filter((t) => !t.done).map((task) => {
                       const dayIndex = weekDates.indexOf(task.scheduled_date);
                       if (dayIndex === -1) return null;
                       const sourceTask = tasks.find((entry) => entry.id === task.task_id);
@@ -1953,7 +1974,7 @@ export default function App() {
                       return (
                         <article
                           key={task.id}
-                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.done ? 'done' : ''} ${task.duration <= 30 ? 'compact' : ''} ${isDragging ? 'dragging' : ''}`}
+                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.duration <= 30 ? 'compact' : ''} ${isDragging ? 'dragging' : ''}`}
                           style={{
                             top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
