@@ -253,10 +253,10 @@ function preferredDate(task: TaskItem) {
 
 function preferredStart(task: TaskItem) {
   const windows = getTaskWindows(task);
-  return Math.min(
-    Math.max(task.start_minutes, windows[0]?.start_minutes ?? AUTO_START_MINUTES),
-    (windows[windows.length - 1]?.end_minutes ?? AUTO_END_MINUTES) - SNAP_MINUTES,
-  );
+  // Use the window start — not task.start_minutes — so we always search from
+  // the earliest valid time in the task's allowed hours, not from a stale
+  // previously-placed position that could skip over earlier free slots.
+  return windows[0]?.start_minutes ?? AUTO_START_MINUTES;
 }
 
 function buildDateSpan(startDate: string, endDate: string) {
@@ -388,7 +388,7 @@ function findDiscretePlacement(
         .map((gap) => {
           const effectiveGapStart = Math.max(gap.start, nowFloor);
           const desired = clampStart(
-            dateKey === preferred ? preferredMinute : Math.max(window.start_minutes, task.start_minutes),
+            dateKey === preferred ? preferredMinute : window.start_minutes,
             task.duration,
           );
           const start = Math.min(Math.max(effectiveGapStart, desired), gap.end - task.duration);
@@ -456,10 +456,7 @@ function allocateSplitBlocks(
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
     // Never schedule before current time on today's date.
-    // Also respect schedule_after time floor on the task's earliest date.
-    const nowFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
-    const taskFloor = dateKey === earliest ? task.start_minutes : 0;
-    const dayTimeFloor = Math.max(nowFloor, taskFloor);
+    const dayTimeFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
 
     for (const window of windows) {
       if (remaining <= 0) {
