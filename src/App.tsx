@@ -540,7 +540,6 @@ export default function App() {
     hasSupabaseConfig ? 'Connecting to Supabase schedule…' : 'Local mode. Add Vercel env vars to sync across devices.',
   );
   const [statusMessage, setStatusMessage] = useState('Drag blocks across the planner to reschedule them.');
-  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedPriorityTaskId, setDraggedPriorityTaskId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
@@ -966,24 +965,72 @@ export default function App() {
     if (!day) return;
     const startMinutes = boardMinutesAt(event.clientY);
 
-    drawStateRef.current = { startMinutes, date: day.date, dayIndex: day.dayIndex };
-    setDrawPreview({ startMinutes, endMinutes: startMinutes + DURATION_STEP, dayIndex: day.dayIndex });
+    const anchor = startMinutes;
+    drawStateRef.current = { startMinutes: anchor, date: day.date, dayIndex: day.dayIndex };
+    setDrawPreview({ startMinutes: anchor, endMinutes: anchor + DURATION_STEP, dayIndex: day.dayIndex });
 
     const el = event.currentTarget;
     el.setPointerCapture(event.pointerId);
 
-    // Use a closure ref so onUpFinal can read the final preview value reliably
-    const finalPreviewRef = { current: { startMinutes, endMinutes: startMinutes + DURATION_STEP } };
+    // Auto-scroll state
+    let scrollRafId = 0;
+    const SCROLL_ZONE = 60; // px from edge triggers scroll
+    const MAX_SCROLL_SPEED = 12; // px per frame
+
+    const stopAutoScroll = () => {
+      if (scrollRafId) { cancelAnimationFrame(scrollRafId); scrollRafId = 0; }
+    };
+
+    const startAutoScroll = (speed: number) => {
+      stopAutoScroll();
+      const step = () => {
+        const board = boardBodyRef.current;
+        if (!board || speed === 0) return;
+        board.scrollTop += speed;
+        scrollRafId = requestAnimationFrame(step);
+      };
+      scrollRafId = requestAnimationFrame(step);
+    };
+
+    // Closure ref so onUpFinal can read the final snapped range
+    const finalPreviewRef = { current: { startMinutes: anchor, endMinutes: anchor + DURATION_STEP } };
+
+    const computeRange = (cursorMinutes: number): { lo: number; hi: number } => {
+      if (cursorMinutes >= anchor) {
+        return { lo: anchor, hi: Math.max(cursorMinutes, anchor + DURATION_STEP) };
+      } else {
+        return { lo: Math.min(cursorMinutes, anchor - DURATION_STEP), hi: anchor };
+      }
+    };
+
     const onMoveCapture = (e: PointerEvent) => {
       if (!drawStateRef.current) return;
-      const endMinutes = boardMinutesAt(e.clientY);
-      const lo = Math.min(drawStateRef.current.startMinutes, endMinutes);
-      const hi = Math.max(lo + DURATION_STEP, endMinutes);
+      const board = boardBodyRef.current;
+
+      // Edge auto-scroll
+      if (board) {
+        const bounds = board.getBoundingClientRect();
+        const distTop = e.clientY - bounds.top;
+        const distBottom = bounds.bottom - e.clientY;
+        if (distTop < SCROLL_ZONE && distTop > 0) {
+          const speed = -MAX_SCROLL_SPEED * (1 - distTop / SCROLL_ZONE);
+          startAutoScroll(speed);
+        } else if (distBottom < SCROLL_ZONE && distBottom > 0) {
+          const speed = MAX_SCROLL_SPEED * (1 - distBottom / SCROLL_ZONE);
+          startAutoScroll(speed);
+        } else {
+          stopAutoScroll();
+        }
+      }
+
+      const cursorMinutes = boardMinutesAt(e.clientY);
+      const { lo, hi } = computeRange(cursorMinutes);
       finalPreviewRef.current = { startMinutes: lo, endMinutes: hi };
       setDrawPreview({ startMinutes: lo, endMinutes: hi, dayIndex: drawStateRef.current.dayIndex });
     };
 
     const onUpFinal = () => {
+      stopAutoScroll();
       el.removeEventListener('pointermove', onMoveCapture);
       el.removeEventListener('pointerup', onUpFinal);
 
@@ -997,7 +1044,6 @@ export default function App() {
       openTaskModalWithTime(s.date, lo, duration);
     };
 
-    // Replace the placeholder handlers with the real ones
     el.addEventListener('pointermove', onMoveCapture);
     el.addEventListener('pointerup', onUpFinal);
   };
@@ -1653,29 +1699,6 @@ export default function App() {
     document.addEventListener('pointerup', onUp);
   };
 
-  const handleBoardDrop = async (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const taskId = event.dataTransfer.getData('text/task-id') || draggedTaskId;
-    if (!taskId) {
-      return;
-    }
-
-    const task = tasks.find((entry) => entry.id === taskId);
-    if (!task) {
-      return;
-    }
-
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const relativeX = event.clientX - bounds.left - TIME_GUTTER;
-    const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
-    const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
-    const startMinutes = clampStart(
-      ((event.clientY - bounds.top + event.currentTarget.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE) + boardWindow.start,
-      task.duration,
-    );
-    await moveTask(taskId, weekDates[dayIndex], startMinutes);
-    setDraggedTaskId(null);
-  };
 
   const handleAutoPlaceDay = async () => {
     const previousTasks = tasks;
