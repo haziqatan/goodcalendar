@@ -553,6 +553,16 @@ export default function App() {
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiPopoverRef = useRef<HTMLDivElement | null>(null);
   const boardBodyRef = useRef<HTMLDivElement | null>(null);
+  const drawStateRef = useRef<{
+    startMinutes: number;
+    date: string;
+    dayIndex: number;
+  } | null>(null);
+  const [drawPreview, setDrawPreview] = useState<{
+    startMinutes: number;
+    endMinutes: number;
+    dayIndex: number;
+  } | null>(null);
   const dragStateRef = useRef<{
     taskId: string;
     task: TaskItem;
@@ -911,6 +921,85 @@ export default function App() {
     setEditingTaskId(null);
     setDraft(buildDraft(selectedDate, hourPresets[0]?.id ?? DEFAULT_HOUR_PRESETS[0].id));
     setShowTaskModal(true);
+  };
+
+  const openTaskModalWithTime = (date: string, startMinutes: number, durationMinutes: number) => {
+    setEditingTaskId(null);
+    const presetId = hourPresets[0]?.id ?? DEFAULT_HOUR_PRESETS[0].id;
+    const base = buildDraft(date, presetId);
+    setDraft({
+      ...base,
+      scheduleAfterMode: 'custom',
+      scheduleAfter: dateKeyToDatetime(date, Math.floor(startMinutes / 60), startMinutes % 60),
+      deadline: '',
+      duration: Math.max(durationMinutes, DURATION_STEP),
+    });
+    setShowTaskModal(true);
+  };
+
+  // Pointer handlers for drag-to-create on the board background
+  const boardMinutesAt = (clientY: number): number => {
+    const board = boardBodyRef.current;
+    if (!board) return 0;
+    const bounds = board.getBoundingClientRect();
+    const raw = (clientY - bounds.top + board.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE + boardWindow.start;
+    return Math.round(raw / DURATION_STEP) * DURATION_STEP;
+  };
+
+  const boardDayAt = (clientX: number): { dayIndex: number; date: string } | null => {
+    const board = boardBodyRef.current;
+    if (!board) return null;
+    const bounds = board.getBoundingClientRect();
+    const relX = clientX - bounds.left - TIME_GUTTER;
+    if (relX < 0) return null;
+    const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
+    const dayIndex = Math.max(0, Math.min(6, Math.floor(relX / dayWidth)));
+    return { dayIndex, date: weekDates[dayIndex] };
+  };
+
+  const handleBoardPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Only trigger on the board background — not on task cards
+    if ((event.target as HTMLElement).closest('.week-task, .week-task-done-strip')) return;
+    if (event.button !== 0) return;
+
+    const day = boardDayAt(event.clientX);
+    if (!day) return;
+    const startMinutes = boardMinutesAt(event.clientY);
+
+    drawStateRef.current = { startMinutes, date: day.date, dayIndex: day.dayIndex };
+    setDrawPreview({ startMinutes, endMinutes: startMinutes + DURATION_STEP, dayIndex: day.dayIndex });
+
+    const el = event.currentTarget;
+    el.setPointerCapture(event.pointerId);
+
+    // Use a closure ref so onUpFinal can read the final preview value reliably
+    const finalPreviewRef = { current: { startMinutes, endMinutes: startMinutes + DURATION_STEP } };
+    const onMoveCapture = (e: PointerEvent) => {
+      if (!drawStateRef.current) return;
+      const endMinutes = boardMinutesAt(e.clientY);
+      const lo = Math.min(drawStateRef.current.startMinutes, endMinutes);
+      const hi = Math.max(lo + DURATION_STEP, endMinutes);
+      finalPreviewRef.current = { startMinutes: lo, endMinutes: hi };
+      setDrawPreview({ startMinutes: lo, endMinutes: hi, dayIndex: drawStateRef.current.dayIndex });
+    };
+
+    const onUpFinal = () => {
+      el.removeEventListener('pointermove', onMoveCapture);
+      el.removeEventListener('pointerup', onUpFinal);
+
+      const s = drawStateRef.current;
+      drawStateRef.current = null;
+      setDrawPreview(null);
+
+      if (!s) return;
+      const { startMinutes: lo, endMinutes: hi } = finalPreviewRef.current;
+      const duration = Math.max(hi - lo, DURATION_STEP);
+      openTaskModalWithTime(s.date, lo, duration);
+    };
+
+    // Replace the placeholder handlers with the real ones
+    el.addEventListener('pointermove', onMoveCapture);
+    el.addEventListener('pointerup', onUpFinal);
   };
 
   const closeTaskModal = () => {
@@ -1899,6 +1988,7 @@ export default function App() {
                     <div
                       className="week-board__inner"
                       style={{ height: `${boardWindow.height + BOARD_TOP_PADDING}px` }}
+                      onPointerDown={handleBoardPointerDown}
                     >
                     <div className="week-board__columns">
                       {weekDates.map((dateKey) => (
@@ -1942,6 +2032,21 @@ export default function App() {
                           height: `${Math.max(dropPreview.duration * PIXELS_PER_MINUTE, 38)}px`,
                         }}
                       />
+                    ) : null}
+
+                    {/* Drag-to-create preview */}
+                    {drawPreview ? (
+                      <div
+                        className="draw-preview"
+                        style={{
+                          top: `${BOARD_TOP_PADDING + (drawPreview.startMinutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
+                          left: `calc(${TIME_GUTTER}px + ${drawPreview.dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 4px)`,
+                          width: `calc((100% - ${TIME_GUTTER}px) / 7 - 8px)`,
+                          height: `${Math.max((drawPreview.endMinutes - drawPreview.startMinutes) * PIXELS_PER_MINUTE, 4)}px`,
+                        }}
+                      >
+                        <span>{formatDisplayTime(drawPreview.startMinutes)} – {formatDisplayTime(drawPreview.endMinutes)}</span>
+                      </div>
                     ) : null}
 
                     {/* Done tasks — thin right-edge strip, below active cards */}

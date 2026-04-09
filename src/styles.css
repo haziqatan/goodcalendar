@@ -605,6 +605,12 @@ button {
 .week-board__inner {
   position: relative;
   min-height: 100%;
+  cursor: crosshair;
+}
+
+/* Task cards restore normal cursor */
+.week-task {
+  cursor: grab;
 }
 
 .week-board__columns {
@@ -726,6 +732,27 @@ button {
 .week-task.priority-critical {
   outline: 1.5px dashed var(--red);
   outline-offset: 1px;
+}
+
+/* Drag-to-create preview block */
+.draw-preview {
+  position: absolute;
+  z-index: 5;
+  border-radius: 8px;
+  background: rgba(22, 82, 240, 0.12);
+  border: 2px solid rgba(22, 82, 240, 0.55);
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  padding: 4px 8px;
+  overflow: hidden;
+}
+
+.draw-preview span {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--primary);
+  white-space: nowrap;
 }
 
 /* Done tasks — rendered as a thin strip behind active cards */
