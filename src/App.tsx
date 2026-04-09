@@ -738,9 +738,11 @@ export default function App() {
     return addDays(latest, 14);
   }, [tasks, weekDates]);
 
+  // Do NOT pass nowMinutes here — existing tasks render at their stored
+  // start_minutes. The now-floor only applies when placing a new task.
   const optimizedBlocks = useMemo<ScheduleBlock[]>(
-    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings, todayKey, nowMinutes),
-    [tasks, planningStart, planningEnd, bufferSettings, todayKey, nowMinutes],
+    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings),
+    [tasks, planningStart, planningEnd, bufferSettings],
   );
 
   const blocksByTaskId = useMemo(() => {
