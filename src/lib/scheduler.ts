@@ -126,6 +126,7 @@ export function findConflict(
 ) {
   return tasks.find(
     (task) =>
+      !task.done &&
       task.id !== excludeId &&
       task.scheduled_date === dateKey &&
       overlaps(task.start_minutes, task.duration, startMinutes, duration),
@@ -148,7 +149,7 @@ function findSlotOnDate(
   const firstStart = clampStart(Math.max(normalizedWindowStart, startMinutes), task.duration);
   for (let cursor = firstStart; cursor + task.duration <= normalizedWindowEnd; cursor += SNAP_MINUTES) {
     const collision = tasks.find((entry) => {
-      if (entry.id === excludeId || entry.scheduled_date !== dateKey) {
+      if (entry.done || entry.id === excludeId || entry.scheduled_date !== dateKey) {
         return false;
       }
 
@@ -570,17 +571,13 @@ export function buildScheduleBlocks(
   nowMinutes = 0,
 ): ScheduleBlock[] {
   const blocksByDate = new Map<string, ScheduleBlock[]>();
-  const lockedTasks = sortTasksChronologically(tasks.filter((task) => task.done));
+  const doneTasks = tasks.filter((task) => task.done);
   const habitTasks = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'buffer')).sort(compareHabitPreference);
   const taskItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'task')).sort(compareTaskImportance);
   const focusItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'focus')).sort(compareFocusFlexibility);
 
-  lockedTasks.forEach((task) => {
-    const block = toBlock(task);
-    pushBlock(blocksByDate, block);
-  });
-
-  const optimizedBlocks: ScheduleBlock[] = lockedTasks.map(toBlock);
+  // Done tasks are shown in the UI but do NOT occupy slots for scheduling.
+  const optimizedBlocks: ScheduleBlock[] = doneTasks.map(toBlock);
 
   habitTasks.forEach((task) => {
     const placement =
