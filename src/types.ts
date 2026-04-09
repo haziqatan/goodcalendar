@@ -17,11 +17,13 @@ export interface BufferSettings {
 export interface WorkflowStage {
   id: string;
   name: string;
-  days: number;
+  enabled: boolean;
+  minDays: number;  // 0.5 = 4 h, 1 = 1 full working day
+  maxDays: number;
+  hourPresetId: string;  // which scheduling window this stage uses
 }
 
 export interface WorkflowConfig {
-  bufferDays: 2 | 3;
   stages: WorkflowStage[];
 }
 

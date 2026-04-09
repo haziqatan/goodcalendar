@@ -1655,44 +1655,6 @@ button {
   margin-top: 2px;
 }
 
-.workflow-buffer-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 16px 12px;
-  border-top: 1px solid var(--line-soft);
-  background: var(--surface);
-}
-
-.workflow-buffer-label {
-  font-size: 0.84rem;
-  font-weight: 500;
-  color: var(--text-2);
-}
-
-.workflow-buffer-chips {
-  display: flex;
-  gap: 6px;
-}
-
-.workflow-buffer-chip {
-  border: 1.5px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-soft);
-  color: var(--text-2);
-  padding: 5px 12px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.workflow-buffer-chip.active {
-  background: var(--primary-soft);
-  border-color: var(--primary);
-  color: var(--primary);
-}
-
 .workflow-notice {
   margin: 0;
   padding: 12px 16px;
@@ -1701,116 +1663,181 @@ button {
   border-top: 1px solid var(--line-soft);
 }
 
+/* Stage table */
+
 .workflow-stages {
   border-top: 1px solid var(--line-soft);
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
+/* 6 columns: enable | name | min | max | hours | dates */
 .workflow-stages-header,
 .workflow-stage-row {
   display: grid;
-  grid-template-columns: 24px 1fr 104px 130px;
-  gap: 8px;
+  grid-template-columns: 28px minmax(160px, 1fr) 82px 82px 130px 130px;
+  gap: 6px;
   align-items: center;
-  padding: 8px 16px;
+  padding: 7px 14px;
   font-size: 0.82rem;
 }
 
 .workflow-stages-header {
   background: var(--line-soft);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: 0.73rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
-  padding-top: 7px;
-  padding-bottom: 7px;
 }
 
 .workflow-stage-row {
   border-top: 1px solid var(--line-soft);
+  background: var(--surface);
   transition: background 100ms ease;
 }
 
 .workflow-stage-row:hover {
-  background: var(--surface);
+  background: var(--surface-soft);
 }
 
-.stage-index {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-  text-align: center;
+.workflow-stage-row.disabled {
+  opacity: 0.45;
 }
 
+/* Enable checkbox cell */
+.stage-enable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.stage-enable input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+/* Stage name cell */
 .stage-name {
-  font-size: 0.84rem;
+  font-size: 0.83rem;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
+.stage-num {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--line-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  letter-spacing: 0.02em;
+}
+
+/* Min / Max day controls */
 .stage-days-control {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .stage-days-btn {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border: 1.5px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: 6px;
+  background: var(--surface-soft);
   color: var(--text);
-  font-size: 1rem;
+  font-size: 0.9rem;
   display: grid;
   place-items: center;
   transition: background 100ms ease, border-color 100ms ease;
   flex-shrink: 0;
+  line-height: 1;
 }
 
-.stage-days-btn:hover {
+.stage-days-btn:not(:disabled):hover {
   background: var(--primary-soft);
   border-color: var(--primary);
+  color: var(--primary);
 }
 
-.stage-days-input {
-  width: 38px;
+.stage-days-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.stage-days-val {
+  min-width: 28px;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Hours preset selector */
+.stage-hours-select {
+  width: 100%;
   border: 1.5px solid var(--line);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-soft);
   color: var(--text);
-  text-align: center;
-  padding: 4px 2px;
-  font-size: 0.84rem;
-  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 4px 6px;
   outline: none;
   transition: border-color 150ms ease;
 }
 
-.stage-days-input:focus {
+.stage-hours-select:not(:disabled):focus {
   border-color: var(--primary);
 }
 
+.stage-hours-select:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Dates column */
 .stage-dates {
-  font-size: 0.78rem;
+  font-size: 0.77rem;
   color: var(--primary);
   font-weight: 500;
   white-space: nowrap;
 }
 
+.stage-dates.muted {
+  color: var(--muted);
+}
+
+/* Summary footer */
 .workflow-total {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 10px 16px;
   background: var(--primary-soft);
   border-top: 1px solid var(--primary-mid);
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--primary);
+}
+
+.workflow-total.over-deadline {
+  background: rgba(229, 62, 62, 0.08);
+  border-top-color: rgba(229, 62, 62, 0.25);
+  color: var(--red);
 }
 
 /* ─── Responsive ───────────────────────────────────────────────────────────── */
