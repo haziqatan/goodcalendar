@@ -993,6 +993,8 @@ export default function App() {
     })() : (draft.scheduleAfter || selectedDate);
     // Strip time component — scheduler works with YYYY-MM-DD date keys
     const scheduleAfter = datetimeToDateKey(resolvedScheduleAfterDt);
+    // Time-of-day in minutes to use as the earliest start for the scheduler on the first day
+    const scheduleAfterMinutes = datetimeToStartMinutes(resolvedScheduleAfterDt);
     const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
     const presetRanges = normalizeRanges(preset.ranges);
@@ -1163,11 +1165,19 @@ export default function App() {
       hours_end: presetBounds.end_minutes,
     };
 
+    // For new tasks: start search from the schedule-after date+time so the
+    // first candidate slot is at or after "now" (or the custom datetime).
+    // For edits: keep the existing placement as the preferred anchor.
+    const placementPreferredDate = existingTask ? existingTask.scheduled_date : scheduleAfter;
+    const placementPreferredStart = existingTask
+      ? existingTask.start_minutes
+      : Math.max(scheduleAfterMinutes, presetBounds.start_minutes);
+
     let placement = findPlacement(
       tasks,
       placementContext,
-      existingTask?.scheduled_date ?? selectedDate,
-      existingTask?.start_minutes ?? presetBounds.start_minutes,
+      placementPreferredDate,
+      placementPreferredStart,
       bufferSettings,
       editingTaskId ?? undefined,
     );
