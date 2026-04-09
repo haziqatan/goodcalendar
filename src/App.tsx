@@ -1694,6 +1694,7 @@ export default function App() {
           </div>
         </header>
 
+        <div className="workspace-main">
         {view === 'planner' ? (
           <section className={`planner-view ${railOpen ? '' : 'rail-collapsed'}`}>
             <div className="planner-main">
@@ -1972,6 +1973,7 @@ export default function App() {
             </div>
           </section>
         )}
+        </div>{/* workspace-main */}
 
         <footer className="workspace-footer">
           <div className="footer-status">

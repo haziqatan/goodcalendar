@@ -79,7 +79,8 @@ button {
 /* ─── Shell layout ─────────────────────────────────────────────────────────── */
 
 .reclaim-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
 }
@@ -245,15 +246,18 @@ button {
 
 .workspace {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* Header */
 
 .workspace-header,
 .workspace-footer {
-  padding: 16px 22px;
+  flex-shrink: 0;
+  padding: 12px 22px;
   background: var(--surface);
 }
 
@@ -263,6 +267,14 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+}
+
+.workspace-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .workspace-header h1 {
@@ -383,10 +395,11 @@ button {
 .priorities-view {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .planner-view {
-  padding: 18px 20px 20px;
+  padding: 14px 20px 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 308px;
   gap: 16px;
@@ -396,10 +409,20 @@ button {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.planner-main,
+.planner-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .planner-rail,
 .priorities-view {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
 /* Card surfaces */
@@ -417,6 +440,10 @@ button {
 .planner-surface {
   padding: 16px;
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .planner-surface__header,
@@ -503,7 +530,9 @@ button {
 
 .week-board {
   border-top: 1px solid var(--line-soft);
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   min-height: 0;
   margin-top: 4px;
 }
@@ -563,7 +592,8 @@ button {
 }
 
 .week-board__body {
-  max-height: min(72vh, 980px);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--surface);
@@ -1104,7 +1134,6 @@ button {
 /* ─── Footer ───────────────────────────────────────────────────────────────── */
 
 .workspace-footer {
-  margin-top: auto;
   border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -1959,10 +1988,6 @@ button {
 
   .reclaim-sidebar {
     display: none;
-  }
-
-  .week-board__body {
-    max-height: none;
   }
 
   .priority-board {
