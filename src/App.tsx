@@ -479,7 +479,7 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     hourPresetId,
     scheduleAfterMode: 'now',
     scheduleAfter: dateKeyToDatetime(selectedDate, 9, 0),
-    deadline: dateKeyToDatetime(selectedDate, 18, 0),
+    deadline: '',
     description: '',
     workflowEnabled: false,
     workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
@@ -494,7 +494,7 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     : dateKeyToDatetime(task.schedule_after ?? task.scheduled_date, 9, 0);
   const deadlineDt = task.deadline
     ? (task.deadline.includes('T') ? task.deadline : dateKeyToDatetime(task.deadline, 18, 0))
-    : dateKeyToDatetime(task.scheduled_date, 18, 0);
+    : '';
   return {
     title: task.title,
     type: task.type,
@@ -2140,14 +2140,26 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <label className="modal-card">
-                  <span>Due date &amp; time</span>
-                  <input
-                    type="datetime-local"
-                    value={draft.deadline}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
-                  />
-                </label>
+                <div className="modal-card">
+                  <span>Due date &amp; time <em className="optional-label">(optional)</em></span>
+                  <div className="deadline-row">
+                    <input
+                      type="datetime-local"
+                      value={draft.deadline}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
+                    />
+                    {draft.deadline ? (
+                      <button
+                        type="button"
+                        className="clear-btn"
+                        onClick={() => setDraft((prev) => ({ ...prev, deadline: '' }))}
+                        aria-label="Clear due date"
+                      >
+                        ✕
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
 
               {/* ── Workflow section ── */}

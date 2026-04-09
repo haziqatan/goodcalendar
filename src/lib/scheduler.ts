@@ -446,9 +446,14 @@ function allocateSplitBlocks(
   let segmentIndex = 0;
   const createdBlocks: ScheduleBlock[] = [];
 
+  // On the earliest date, respect start_minutes as a time-of-day floor (e.g. "now")
+  const timeFloor = task.start_minutes;
+
   for (let dateKey = earliest; dateKey <= candidateEnd && remaining > 0; dateKey = addDays(dateKey, 1)) {
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
+    // Only enforce the time floor on the earliest date
+    const dayTimeFloor = dateKey === earliest ? timeFloor : 0;
 
     for (const window of windows) {
       if (remaining <= 0) {
@@ -461,7 +466,13 @@ function allocateSplitBlocks(
           break;
         }
 
-        const chunk = fitChunkDuration(remaining, gap.end - gap.start, minDuration, maxDuration);
+        // Clip gap start to the time floor — don't schedule before "now" on the first day
+        const effectiveStart = Math.max(gap.start, dayTimeFloor);
+        if (effectiveStart >= gap.end) {
+          continue;
+        }
+
+        const chunk = fitChunkDuration(remaining, gap.end - effectiveStart, minDuration, maxDuration);
         if (!chunk) {
           continue;
         }
@@ -476,7 +487,7 @@ function allocateSplitBlocks(
           priority: task.priority,
           duration: chunk,
           scheduled_date: dateKey,
-          start_minutes: gap.start,
+          start_minutes: effectiveStart,
           hours_ranges: task.hours_ranges,
           deadline: task.deadline,
           done: task.done,

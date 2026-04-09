@@ -1384,6 +1384,44 @@ button {
   gap: 8px;
 }
 
+.deadline-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deadline-row input {
+  flex: 1;
+}
+
+.clear-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease;
+}
+
+.clear-btn:hover {
+  background: var(--line-soft);
+  color: var(--text);
+}
+
+.optional-label {
+  font-weight: 400;
+  font-style: normal;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .now-label {
   font-size: 0.85rem;
   color: var(--muted);
