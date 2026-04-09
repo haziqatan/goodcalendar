@@ -14,6 +14,17 @@ export interface BufferSettings {
   travel_time: number;
 }
 
+export interface WorkflowStage {
+  id: string;
+  name: string;
+  days: number;
+}
+
+export interface WorkflowConfig {
+  bufferDays: 2 | 3;
+  stages: WorkflowStage[];
+}
+
 export interface TaskItem {
   id: string;
   title: string;
@@ -32,6 +43,9 @@ export interface TaskItem {
   scheduled_date: string;
   start_minutes: number;
   done: boolean;
+  workflow_config?: WorkflowConfig;
+  workflow_parent_id?: string;
+  workflow_stage_id?: string;
 }
 
 export interface ScheduleBlock {

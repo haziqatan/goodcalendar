@@ -46,7 +46,7 @@ import {
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange } from './types';
+import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowConfig, WorkflowStage } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -73,6 +73,9 @@ interface TaskDraft {
   scheduleAfter: string;
   deadline: string;
   description: string;
+  workflowEnabled: boolean;
+  workflowBufferDays: 2 | 3;
+  workflowStages: WorkflowStage[];
 }
 
 interface EmojiClickDetail {
@@ -81,6 +84,40 @@ interface EmojiClickDetail {
 
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const BUFFER_SETTINGS_STORAGE_KEY = 'goodcalendar-buffer-settings';
+
+const DEFAULT_WORKFLOW_STAGES: WorkflowStage[] = [
+  { id: 'req-gathering', name: 'Requirement Gathering', days: 2 },
+  { id: 'prd-creation', name: 'PRD Creation', days: 3 },
+  { id: 'po-approval-prd', name: 'PO Approval (PRD)', days: 1 },
+  { id: 'design', name: 'Design', days: 5 },
+  { id: 'po-approval-design', name: 'PO Approval (Design)', days: 1 },
+  { id: 'development', name: 'Development (Frontend & Backend)', days: 10 },
+  { id: 'deploy-dev', name: 'Deploy to Dev', days: 1 },
+  { id: 'qa', name: 'QA', days: 3 },
+  { id: 'deploy-live', name: 'Deploy to Live', days: 1 },
+  { id: 'post-release-qa', name: 'Post-Release QA', days: 2 },
+];
+
+type StagedWorkflowItem = WorkflowStage & { startDate: string; endDate: string };
+
+function calculateStageTimeline(
+  stages: WorkflowStage[],
+  deadline: string,
+  bufferDays: 2 | 3,
+): StagedWorkflowItem[] {
+  if (!deadline || stages.length === 0) {
+    return stages.map((s) => ({ ...s, startDate: '', endDate: '' }));
+  }
+  const internalDeadline = addDays(deadline, -bufferDays);
+  const result: StagedWorkflowItem[] = [];
+  let endDate = internalDeadline;
+  for (let i = stages.length - 1; i >= 0; i--) {
+    const startDate = addDays(endDate, -stages[i].days);
+    result.unshift({ ...stages[i], startDate, endDate });
+    endDate = startDate;
+  }
+  return result;
+}
 const TIME_GUTTER = 80;
 const DURATION_STEP = 15;
 const BOARD_TOP_PADDING = 18;
@@ -324,10 +361,14 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     scheduleAfter: selectedDate,
     deadline: selectedDate,
     description: '',
+    workflowEnabled: false,
+    workflowBufferDays: 2,
+    workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
   };
 }
 
 function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
+  const wfConfig = task.workflow_config;
   return {
     title: task.title,
     type: task.type,
@@ -340,6 +381,9 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     scheduleAfter: task.schedule_after ?? task.scheduled_date,
     deadline: task.deadline ?? task.scheduled_date,
     description: task.description ?? '',
+    workflowEnabled: Boolean(wfConfig),
+    workflowBufferDays: wfConfig?.bufferDays ?? 2,
+    workflowStages: wfConfig?.stages.map((s) => ({ ...s })) ?? DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
   };
 }
 
@@ -677,6 +721,10 @@ export default function App() {
   const capacityMinutes = 7 * capacitySource.ranges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
+  const calculatedStages = draft.workflowEnabled
+    ? calculateStageTimeline(draft.workflowStages, draft.deadline, draft.workflowBufferDays)
+    : [];
+
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
     setWeekStart(startOfWeek(fromDateKey(dateKey)));
@@ -804,6 +852,133 @@ export default function App() {
     }
 
     const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) : null;
+
+    // ── WORKFLOW PATH ──────────────────────────────────────────────────────────
+    if (draft.workflowEnabled) {
+      if (!draft.deadline) {
+        setStatusMessage('A due date is required to calculate workflow stage timelines.');
+        return;
+      }
+      const stages = calculateStageTimeline(draft.workflowStages, draft.deadline, draft.workflowBufferDays);
+      if (stages.length === 0 || !stages[0].startDate) {
+        setStatusMessage('Workflow stages could not be calculated — check the due date.');
+        return;
+      }
+
+      const parentId = editingTaskId ?? crypto.randomUUID();
+      const wfConfig: WorkflowConfig = {
+        bufferDays: draft.workflowBufferDays,
+        stages: draft.workflowStages,
+      };
+
+      const parentItem: TaskItem = {
+        id: parentId,
+        title: draft.title.trim(),
+        description: draft.description.trim(),
+        type: 'task',
+        priority: draft.priority,
+        duration: 30,
+        hour_preset: preset.name,
+        hours_start: presetBounds.start_minutes,
+        hours_end: presetBounds.end_minutes,
+        hours_ranges: presetRanges,
+        schedule_after: stages[0].startDate,
+        deadline: draft.deadline || undefined,
+        scheduled_date: stages[0].startDate,
+        start_minutes: presetBounds.start_minutes,
+        done: existingTask?.done ?? false,
+        workflow_config: wfConfig,
+      };
+
+      const dailyMinutes = presetRanges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
+      const existingChildren = editingTaskId ? tasks.filter((t) => t.workflow_parent_id === editingTaskId) : [];
+
+      const stageTasks: TaskItem[] = stages.map((stage) => {
+        const existing = existingChildren.find((c) => c.workflow_stage_id === stage.id);
+        const stageDuration = Math.max(stage.days * dailyMinutes, DURATION_STEP);
+        return {
+          id: existing?.id ?? crypto.randomUUID(),
+          title: `${parentItem.title} — ${stage.name}`,
+          description: `Stage of "${parentItem.title}"`,
+          type: 'task' as TaskType,
+          priority: draft.priority,
+          duration: stageDuration,
+          min_duration: Math.min(dailyMinutes, stageDuration),
+          max_duration: stageDuration,
+          hour_preset: preset.name,
+          hours_start: presetBounds.start_minutes,
+          hours_end: presetBounds.end_minutes,
+          hours_ranges: presetRanges,
+          schedule_after: stage.startDate,
+          deadline: stage.endDate,
+          scheduled_date: stage.startDate,
+          start_minutes: presetBounds.start_minutes,
+          done: existing?.done ?? false,
+          workflow_parent_id: parentId,
+          workflow_stage_id: stage.id,
+        };
+      });
+
+      const previousTasks = tasks;
+      setTasks((prev) => {
+        const filtered = editingTaskId
+          ? prev.filter((t) => t.id !== editingTaskId && t.workflow_parent_id !== editingTaskId)
+          : prev;
+        return sortTasksChronologically([...filtered, parentItem, ...stageTasks]);
+      });
+      focusDate(parentItem.scheduled_date);
+      setView('planner');
+      closeTaskModal();
+      setStatusMessage(
+        `${parentItem.title} ${editingTaskId ? 'updated' : 'created'} with ${stageTasks.length} workflow stages.`,
+      );
+
+      if (!supabase) return;
+
+      if (editingTaskId) {
+        await supabase.from('schedule_items').delete().eq('workflow_parent_id', editingTaskId);
+        const { error: updateError } = await supabase
+          .from('schedule_items')
+          .update({
+            title: parentItem.title,
+            description: parentItem.description,
+            type: parentItem.type,
+            priority: parentItem.priority,
+            duration: parentItem.duration,
+            hour_preset: parentItem.hour_preset,
+            hours_start: parentItem.hours_start,
+            hours_end: parentItem.hours_end,
+            hours_ranges: parentItem.hours_ranges,
+            schedule_after: parentItem.schedule_after,
+            deadline: parentItem.deadline,
+            scheduled_date: parentItem.scheduled_date,
+            start_minutes: parentItem.start_minutes,
+            workflow_config: parentItem.workflow_config,
+          })
+          .eq('id', parentId);
+        if (updateError) {
+          setSyncMessage(`Update failed: ${updateError.message}`);
+          setTasks(previousTasks);
+          return;
+        }
+      } else {
+        const { error: insertError } = await supabase.from('schedule_items').insert(parentItem);
+        if (insertError) {
+          setSyncMessage(`Insert failed: ${insertError.message}`);
+          setTasks(previousTasks);
+          return;
+        }
+      }
+
+      const { error: stageError } = await supabase.from('schedule_items').insert(stageTasks);
+      if (stageError) {
+        setSyncMessage(`Stage insert failed: ${stageError.message}`);
+        setTasks(previousTasks);
+      }
+      return;
+    }
+
+    // ── NORMAL PATH ───────────────────────────────────────────────────────────
     const placementContext = {
       type: draft.type,
       duration,
@@ -936,12 +1111,18 @@ export default function App() {
       return;
     }
 
-    setTasks((prev) => prev.filter((task) => task.id !== targetId));
+    // Remove parent + any workflow children from local state
+    setTasks((prev) => prev.filter((task) => task.id !== targetId && task.workflow_parent_id !== targetId));
     closeTaskModal();
     setStatusMessage(`${target.title} deleted.`);
 
     if (!supabase) {
       return;
+    }
+
+    // Delete workflow children first if this is a workflow parent
+    if (target.workflow_config) {
+      await supabase.from('schedule_items').delete().eq('workflow_parent_id', targetId);
     }
 
     const { error } = await supabase.from('schedule_items').delete().eq('id', targetId);
@@ -1650,54 +1831,58 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="modal-card modal-card--duration">
-                <div>
-                  <span>Duration</span>
-                  <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} mins`}</strong>
-                </div>
-                <div className="duration-controls">
-                  <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration - DURATION_STEP) }))}>
-                    <MinusCircle size={20} />
-                  </button>
-                  <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration + DURATION_STEP) }))}>
-                    <PlusCircle size={20} />
-                  </button>
-                </div>
-              </div>
+              {!draft.workflowEnabled ? (
+                <>
+                  <div className="modal-card modal-card--duration">
+                    <div>
+                      <span>Duration</span>
+                      <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} mins`}</strong>
+                    </div>
+                    <div className="duration-controls">
+                      <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration - DURATION_STEP) }))}>
+                        <MinusCircle size={20} />
+                      </button>
+                      <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration + DURATION_STEP) }))}>
+                        <PlusCircle size={20} />
+                      </button>
+                    </div>
+                  </div>
 
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={draft.flexible}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))}
-                />
-                <span>Flexible split duration</span>
-              </label>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={draft.flexible}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))}
+                    />
+                    <span>Flexible split duration</span>
+                  </label>
 
-              <div className="modal-grid">
-                <label className="modal-card">
-                  <span>Min duration</span>
-                  <input
-                    type="number"
-                    min={15}
-                    step={15}
-                    value={draft.minDuration}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, minDuration: clampDuration(Number(event.target.value)) }))}
-                    disabled={!draft.flexible}
-                  />
-                </label>
-                <label className="modal-card">
-                  <span>Max duration</span>
-                  <input
-                    type="number"
-                    min={15}
-                    step={15}
-                    value={draft.maxDuration}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, maxDuration: clampDuration(Number(event.target.value)) }))}
-                    disabled={!draft.flexible}
-                  />
-                </label>
-              </div>
+                  <div className="modal-grid">
+                    <label className="modal-card">
+                      <span>Min duration</span>
+                      <input
+                        type="number"
+                        min={15}
+                        step={15}
+                        value={draft.minDuration}
+                        onChange={(event) => setDraft((prev) => ({ ...prev, minDuration: clampDuration(Number(event.target.value)) }))}
+                        disabled={!draft.flexible}
+                      />
+                    </label>
+                    <label className="modal-card">
+                      <span>Max duration</span>
+                      <input
+                        type="number"
+                        min={15}
+                        step={15}
+                        value={draft.maxDuration}
+                        onChange={(event) => setDraft((prev) => ({ ...prev, maxDuration: clampDuration(Number(event.target.value)) }))}
+                        disabled={!draft.flexible}
+                      />
+                    </label>
+                  </div>
+                </>
+              ) : null}
 
               <div className="modal-card hours-card">
                 <div className="hours-card__label">
@@ -1741,24 +1926,133 @@ export default function App() {
                 </label>
               </div>
 
-              <div className="modal-grid">
-                <label className="modal-card">
-                  <span>Type</span>
-                  <select
-                    value={draft.type}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
-                  >
-                    <option value="task">Task</option>
-                    <option value="focus">Focus</option>
-                    <option value="buffer">Buffer</option>
-                  </select>
+              {/* ── Workflow section ── */}
+              <div className="workflow-section">
+                <label className="workflow-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={draft.workflowEnabled}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, workflowEnabled: event.target.checked }))}
+                  />
+                  <div className="workflow-toggle-label">
+                    <strong>Workflow stages</strong>
+                    <span>Auto-schedule a product development pipeline backward from the due date</span>
+                  </div>
                 </label>
-                <div className="modal-card helper-card">
-                  <span>Will schedule inside</span>
-                  <strong>{selectedPreset.name}</strong>
-                  <small>{presetSummary(selectedPreset)}</small>
-                </div>
+
+                {draft.workflowEnabled ? (
+                  <>
+                    <div className="workflow-buffer-row">
+                      <span className="workflow-buffer-label">Internal deadline buffer</span>
+                      <div className="workflow-buffer-chips">
+                        {([2, 3] as const).map((days) => (
+                          <button
+                            key={days}
+                            type="button"
+                            className={`workflow-buffer-chip ${draft.workflowBufferDays === days ? 'active' : ''}`}
+                            onClick={() => setDraft((prev) => ({ ...prev, workflowBufferDays: days }))}
+                          >
+                            {days} days earlier
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {!draft.deadline ? (
+                      <p className="workflow-notice">Set a due date above to see stage timelines.</p>
+                    ) : (
+                      <div className="workflow-stages">
+                        <div className="workflow-stages-header">
+                          <span>#</span>
+                          <span>Stage</span>
+                          <span>Days</span>
+                          <span>Timeline</span>
+                        </div>
+                        {calculatedStages.map((stage, index) => (
+                          <div key={stage.id} className="workflow-stage-row">
+                            <span className="stage-index">{index + 1}</span>
+                            <span className="stage-name">{stage.name}</span>
+                            <div className="stage-days-control">
+                              <button
+                                type="button"
+                                className="stage-days-btn"
+                                onClick={() =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    workflowStages: prev.workflowStages.map((s) =>
+                                      s.id === stage.id ? { ...s, days: Math.max(1, s.days - 1) } : s,
+                                    ),
+                                  }))
+                                }
+                              >−</button>
+                              <input
+                                type="number"
+                                min={1}
+                                value={stage.days}
+                                className="stage-days-input"
+                                onChange={(event) =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    workflowStages: prev.workflowStages.map((s) =>
+                                      s.id === stage.id ? { ...s, days: Math.max(1, Number(event.target.value)) } : s,
+                                    ),
+                                  }))
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="stage-days-btn"
+                                onClick={() =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    workflowStages: prev.workflowStages.map((s) =>
+                                      s.id === stage.id ? { ...s, days: s.days + 1 } : s,
+                                    ),
+                                  }))
+                                }
+                              >+</button>
+                            </div>
+                            <span className="stage-dates">
+                              {stage.startDate
+                                ? formatDate(stage.startDate, { month: 'short', day: 'numeric' })
+                                : '—'}
+                              {' → '}
+                              {stage.endDate
+                                ? formatDate(stage.endDate, { month: 'short', day: 'numeric' })
+                                : '—'}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="workflow-total">
+                          <span>Total: {draft.workflowStages.reduce((sum, s) => sum + s.days, 0)} working days</span>
+                          <span>Internal deadline: {formatDate(addDays(draft.deadline, -draft.workflowBufferDays), { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : null}
               </div>
+
+              {!draft.workflowEnabled ? (
+                <div className="modal-grid">
+                  <label className="modal-card">
+                    <span>Type</span>
+                    <select
+                      value={draft.type}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
+                    >
+                      <option value="task">Task</option>
+                      <option value="focus">Focus</option>
+                      <option value="buffer">Buffer</option>
+                    </select>
+                  </label>
+                  <div className="modal-card helper-card">
+                    <span>Will schedule inside</span>
+                    <strong>{selectedPreset.name}</strong>
+                    <small>{presetSummary(selectedPreset)}</small>
+                  </div>
+                </div>
+              ) : null}
 
               <label className="modal-card notes-card">
                 <span>Notes</span>
