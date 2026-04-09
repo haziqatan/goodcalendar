@@ -84,79 +84,133 @@ interface EmojiClickDetail {
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const BUFFER_SETTINGS_STORAGE_KEY = 'goodcalendar-buffer-settings';
 
-// weight = relative share of total time; days = auto-calculated, user-editable
+// weight = relative share of total time; minutes = auto-calculated, user-editable
 const DEFAULT_WORKFLOW_STAGES: WorkflowStage[] = [
-  { id: 'req-gathering',      name: 'Requirement Gathering (with client)', enabled: true, weight: 7,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'prd-creation',       name: 'PRD Creation',                        enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'po-approval-prd',    name: 'PO Approval (PRD)',                   enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'design',             name: 'Design',                              enabled: true, weight: 3,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'po-approval-design', name: 'PO Approval (Design)',                enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'development',        name: 'Development (Frontend & Backend)',     enabled: true, weight: 10, days: 1, hourPresetId: 'working-hours'  },
-  { id: 'dev-checkin',        name: 'Developer Update Check',              enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'qa',                 name: 'QA',                                  enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
-  { id: 'deploy-live',        name: 'Deploy to Live',                      enabled: true, weight: 1,  days: 1, hourPresetId: 'personal-hours' },
-  { id: 'post-release-qa',    name: 'Post-Release QA',                     enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'req-gathering',      name: 'Requirement Gathering (with client)', enabled: true, weight: 7,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'prd-creation',       name: 'PRD Creation',                        enabled: true, weight: 2,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'po-approval-prd',    name: 'PO Approval (PRD)',                   enabled: true, weight: 1,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'design',             name: 'Design',                              enabled: true, weight: 3,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'po-approval-design', name: 'PO Approval (Design)',                enabled: true, weight: 1,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'development',        name: 'Development (Frontend & Backend)',     enabled: true, weight: 10, minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'dev-checkin',        name: 'Developer Update Check',              enabled: true, weight: 1,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'qa',                 name: 'QA',                                  enabled: true, weight: 2,  minutes: 60, hourPresetId: 'working-hours'  },
+  { id: 'deploy-live',        name: 'Deploy to Live',                      enabled: true, weight: 1,  minutes: 60, hourPresetId: 'personal-hours' },
+  { id: 'post-release-qa',    name: 'Post-Release QA',                     enabled: true, weight: 2,  minutes: 60, hourPresetId: 'working-hours'  },
 ];
 
-type StagedWorkflowItem = WorkflowStage & { startDate: string; endDate: string };
+// startDt / endDt are ISO datetime strings "YYYY-MM-DDTHH:mm"
+type StagedWorkflowItem = WorkflowStage & { startDt: string; endDt: string };
 
-// Normalise stages from storage/Supabase (handles old minDays/maxDays shape)
+// ── DateTime helpers ──────────────────────────────────────────────────────────
+
+// Parse "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" → Date (local)
+function parseDt(dt: string): Date {
+  if (dt.includes('T')) {
+    const [datePart, timePart] = dt.split('T');
+    const [y, mo, d] = datePart.split('-').map(Number);
+    const [h, mi] = timePart.split(':').map(Number);
+    return new Date(y, mo - 1, d, h, mi);
+  }
+  return fromDateKey(dt);
+}
+
+// Format a Date → "YYYY-MM-DDTHH:mm"
+function toDtKey(date: Date): string {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
+  const d  = String(date.getDate()).padStart(2, '0');
+  const h  = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  return `${y}-${mo}-${d}T${h}:${mi}`;
+}
+
+// Add minutes to a dt string → dt string
+function addMinutesToDt(dt: string, minutes: number): string {
+  const date = parseDt(dt);
+  date.setMinutes(date.getMinutes() + minutes);
+  return toDtKey(date);
+}
+
+// Total minutes between two dt strings
+function minutesBetweenDt(start: string, end: string): number {
+  return Math.round((parseDt(end).getTime() - parseDt(start).getTime()) / 60000);
+}
+
+// Format a dt string for display: "Apr 9, 10:30 AM"
+function formatDt(dt: string): string {
+  if (!dt) return '—';
+  const date = parseDt(dt);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+// Format minutes as human-readable duration: "30m", "2h", "1d 4h", "3d"
+function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const totalHours = minutes / 60;
+  const days = Math.floor(totalHours / 8); // treat 8h = 1 working day for display
+  const remHours = Math.round(totalHours % 8 * 2) / 2;
+  if (days === 0) return `${totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h`;
+  if (remHours === 0) return `${days}d`;
+  return `${days}d ${remHours}h`;
+}
+
+// Snap minutes to nearest 15
+function snapToQuarter(m: number): number {
+  return Math.max(15, Math.round(m / 15) * 15);
+}
+
+// ── Stage helpers ─────────────────────────────────────────────────────────────
+
+// Normalise stages from storage/Supabase (handles old days/minDays/maxDays shapes)
 function normalizeWorkflowStages(raw: Array<Partial<WorkflowStage> & { days?: number; minDays?: number; maxDays?: number }>): WorkflowStage[] {
   return raw.map((s, idx) => {
     const fallbackDays = s.days ?? s.minDays ?? s.maxDays ?? 1;
+    const fallbackMinutes = s.minutes ?? (fallbackDays * 8 * 60);
     return {
       id: s.id ?? crypto.randomUUID(),
       name: s.name ?? `Stage ${idx + 1}`,
       enabled: s.enabled ?? true,
-      days: fallbackDays,
+      minutes: fallbackMinutes,
       weight: s.weight ?? fallbackDays,
       hourPresetId: s.hourPresetId ?? 'working-hours',
     };
   });
 }
 
-function formatStageDays(days: number): string {
-  if (days < 1) return `${Math.round(days * 8)}h`;
-  return `${days}d`;
-}
-
-function daysBetweenKeys(start: string, end: string): number {
-  return Math.round((fromDateKey(end).getTime() - fromDateKey(start).getTime()) / 86400000);
-}
-
-// Proportionally distribute totalDays across enabled stages by weight, min 0.5 days each.
-// Preserves manual overrides for stages where overridden=true.
-function autoDistributeStages(stages: WorkflowStage[], totalDays: number): WorkflowStage[] {
+// Proportionally distribute totalMinutes across enabled stages by weight, min 15 min each.
+function autoDistributeStages(stages: WorkflowStage[], totalMinutes: number): WorkflowStage[] {
   const enabledStages = stages.filter((s) => s.enabled);
-  if (enabledStages.length === 0 || totalDays <= 0) return stages;
-
+  if (enabledStages.length === 0 || totalMinutes <= 0) return stages;
   const totalWeight = enabledStages.reduce((sum, s) => sum + s.weight, 0);
   if (totalWeight === 0) return stages;
-
   return stages.map((s) => {
     if (!s.enabled) return s;
-    // Round to nearest 0.5, minimum 0.5
-    const proportional = Math.max(0.5, Math.round((s.weight / totalWeight) * totalDays * 2) / 2);
-    return { ...s, days: proportional };
+    const raw = (s.weight / totalWeight) * totalMinutes;
+    return { ...s, minutes: snapToQuarter(raw) };
   });
 }
 
-// Forward scheduling: chains enabled stages from scheduleAfter using their days
-function calculateStageTimeline(stages: WorkflowStage[], scheduleAfter: string): StagedWorkflowItem[] {
-  if (!scheduleAfter || stages.length === 0) {
-    return stages.map((s) => ({ ...s, startDate: '', endDate: '' }));
+// Forward-chain enabled stages from scheduleAfter dt string using their minutes
+function calculateStageTimeline(stages: WorkflowStage[], scheduleAfterDt: string): StagedWorkflowItem[] {
+  if (!scheduleAfterDt || stages.length === 0) {
+    return stages.map((s) => ({ ...s, startDt: '', endDt: '' }));
   }
   const result: StagedWorkflowItem[] = [];
-  let cursor = scheduleAfter;
+  let cursor = scheduleAfterDt;
   for (const stage of stages) {
     if (!stage.enabled) {
-      result.push({ ...stage, startDate: '', endDate: '' });
+      result.push({ ...stage, startDt: '', endDt: '' });
       continue;
     }
-    const calendarDays = Math.max(1, Math.ceil(stage.days));
-    const endDate = addDays(cursor, calendarDays);
-    result.push({ ...stage, startDate: cursor, endDate });
-    cursor = endDate;
+    const endDt = addMinutesToDt(cursor, stage.minutes);
+    result.push({ ...stage, startDt: cursor, endDt });
+    cursor = endDt;
   }
   return result;
 }
@@ -390,6 +444,28 @@ function timeInputToMinutes(value: string) {
   return (hours * 60) + minutes;
 }
 
+// "YYYY-MM-DD" → "YYYY-MM-DDTHH:mm" with given time (HH, mm)
+function dateKeyToDatetime(dateKey: string, hours = 9, mins = 0): string {
+  const h = String(hours).padStart(2, '0');
+  const m = String(mins).padStart(2, '0');
+  return `${dateKey}T${h}:${m}`;
+}
+
+// "YYYY-MM-DDTHH:mm" → "YYYY-MM-DD"
+function datetimeToDateKey(dt: string): string {
+  return dt.includes('T') ? dt.split('T')[0] : dt;
+}
+
+// "YYYY-MM-DDTHH:mm" → minutes since midnight
+function datetimeToStartMinutes(dt: string): number {
+  if (dt.includes('T')) {
+    const [, timePart] = dt.split('T');
+    const [h, m] = timePart.split(':').map(Number);
+    return h * 60 + m;
+  }
+  return 9 * 60;
+}
+
 function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
   return {
     title: '',
@@ -400,16 +476,23 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     minDuration: 30,
     maxDuration: 120,
     hourPresetId,
-    scheduleAfter: selectedDate,
-    deadline: selectedDate,
+    scheduleAfter: dateKeyToDatetime(selectedDate, 9, 0),
+    deadline: dateKeyToDatetime(selectedDate, 18, 0),
     description: '',
     workflowEnabled: false,
-    workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })), // days will be auto-set by effect
+    workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
   };
 }
 
 function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
   const wfConfig = task.workflow_config;
+  // Upgrade plain date strings to datetime strings
+  const scheduleAfterDt = (task.schedule_after ?? task.scheduled_date).includes('T')
+    ? (task.schedule_after ?? task.scheduled_date)
+    : dateKeyToDatetime(task.schedule_after ?? task.scheduled_date, 9, 0);
+  const deadlineDt = task.deadline
+    ? (task.deadline.includes('T') ? task.deadline : dateKeyToDatetime(task.deadline, 18, 0))
+    : dateKeyToDatetime(task.scheduled_date, 18, 0);
   return {
     title: task.title,
     type: task.type,
@@ -419,8 +502,8 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     minDuration: task.min_duration ?? Math.min(task.duration, 30),
     maxDuration: task.max_duration ?? Math.max(task.duration, 120),
     hourPresetId,
-    scheduleAfter: task.schedule_after ?? task.scheduled_date,
-    deadline: task.deadline ?? task.scheduled_date,
+    scheduleAfter: scheduleAfterDt,
+    deadline: deadlineDt,
     description: task.description ?? '',
     workflowEnabled: Boolean(wfConfig),
     workflowStages: wfConfig?.stages
@@ -765,9 +848,9 @@ export default function App() {
 
   const calculatedStages = (() => {
     if (!draft.workflowEnabled || !draft.scheduleAfter) return [] as StagedWorkflowItem[];
-    const totalDays = draft.deadline ? daysBetweenKeys(draft.scheduleAfter, draft.deadline) : 0;
-    const distributed = totalDays > 0
-      ? autoDistributeStages(draft.workflowStages, totalDays)
+    const totalMinutes = draft.deadline ? minutesBetweenDt(draft.scheduleAfter, draft.deadline) : 0;
+    const distributed = totalMinutes > 0
+      ? autoDistributeStages(draft.workflowStages, totalMinutes)
       : draft.workflowStages;
     return calculateStageTimeline(distributed, draft.scheduleAfter);
   })();
@@ -888,7 +971,9 @@ export default function App() {
     const normalizedMaxDuration = draft.flexible
       ? Math.min(Math.max(clampDuration(Math.max(draft.minDuration, draft.maxDuration)), normalizedMinDuration ?? DURATION_STEP), duration)
       : undefined;
-    const scheduleAfter = draft.scheduleAfter || selectedDate;
+    // Strip time component — scheduler works with YYYY-MM-DD date keys
+    const scheduleAfter = datetimeToDateKey(draft.scheduleAfter || selectedDate);
+    const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
     const presetRanges = normalizeRanges(preset.ranges);
     const presetBounds = rangeBounds(presetRanges);
@@ -908,23 +993,27 @@ export default function App() {
         return;
       }
       if (!draft.scheduleAfter) {
-        setStatusMessage('Set a "Schedule after" date to calculate stage timelines.');
+        setStatusMessage('Set a "Schedule after" date and time to calculate stage timelines.');
         return;
       }
       // Use the same auto-distributed timeline shown in the UI
-      const totalDays = draft.deadline ? daysBetweenKeys(draft.scheduleAfter, draft.deadline) : 0;
-      const distributedStages = totalDays > 0
-        ? autoDistributeStages(draft.workflowStages, totalDays)
+      const totalMinutes = draft.deadline ? minutesBetweenDt(draft.scheduleAfter, draft.deadline) : 0;
+      const distributedStages = totalMinutes > 0
+        ? autoDistributeStages(draft.workflowStages, totalMinutes)
         : draft.workflowStages;
       const stages = calculateStageTimeline(distributedStages, draft.scheduleAfter);
       const firstEnabled = stages.find((s) => s.enabled);
-      if (!firstEnabled?.startDate) {
+      if (!firstEnabled?.startDt) {
         setStatusMessage('Could not calculate stage timelines — check Schedule after date.');
         return;
       }
 
       const parentId = editingTaskId ?? crypto.randomUUID();
       const wfConfig: WorkflowConfig = { stages: draft.workflowStages };
+
+      const parentDateKey = datetimeToDateKey(firstEnabled.startDt);
+      const parentStartMinutes = datetimeToStartMinutes(firstEnabled.startDt);
+      const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : undefined;
 
       const parentItem: TaskItem = {
         id: parentId,
@@ -937,10 +1026,10 @@ export default function App() {
         hours_start: presetBounds.start_minutes,
         hours_end: presetBounds.end_minutes,
         hours_ranges: presetRanges,
-        schedule_after: firstEnabled.startDate,
-        deadline: draft.deadline || undefined,
-        scheduled_date: firstEnabled.startDate,
-        start_minutes: presetBounds.start_minutes,
+        schedule_after: parentDateKey,
+        deadline: deadlineDateKey,
+        scheduled_date: parentDateKey,
+        start_minutes: parentStartMinutes,
         done: existingTask?.done ?? false,
         workflow_config: wfConfig,
       };
@@ -959,10 +1048,12 @@ export default function App() {
             selectedPreset;
           const stageRanges = normalizeRanges(stagePreset.ranges);
           const stageBounds = rangeBounds(stageRanges);
-          const stageDailyMinutes = stageRanges.reduce((sum, r) => sum + (r.end_minutes - r.start_minutes), 0);
-          // duration = stage.days × daily working minutes for that preset
-          const stageDuration = Math.max(Math.round(stage.days * stageDailyMinutes), DURATION_STEP);
-          const stageMinDuration = Math.max(Math.round(0.5 * stageDailyMinutes), DURATION_STEP);
+          // stage.minutes is the allocated time; use it directly as duration
+          const stageDuration = Math.max(stage.minutes, DURATION_STEP);
+          const stageMinDuration = Math.max(Math.round(stageDuration / 4), DURATION_STEP);
+          const stageDateKey = datetimeToDateKey(stage.startDt);
+          const stageStartMinutes = datetimeToStartMinutes(stage.startDt);
+          const stageDeadlineKey = datetimeToDateKey(stage.endDt);
           return {
             id: existing?.id ?? crypto.randomUUID(),
             title: `${draft.title.trim()} — ${stage.name}`,
@@ -976,10 +1067,10 @@ export default function App() {
             hours_start: stageBounds.start_minutes,
             hours_end: stageBounds.end_minutes,
             hours_ranges: stageRanges,
-            schedule_after: stage.startDate,
-            deadline: stage.endDate,
-            scheduled_date: stage.startDate,
-            start_minutes: stageBounds.start_minutes,
+            schedule_after: stageDateKey,
+            deadline: stageDeadlineKey,
+            scheduled_date: stageDateKey,
+            start_minutes: stageStartMinutes,
             done: existing?.done ?? false,
             workflow_parent_id: parentId,
             workflow_stage_id: stage.id,
@@ -1049,7 +1140,7 @@ export default function App() {
     const placementContext = {
       type: draft.type,
       duration,
-      deadline: draft.deadline || undefined,
+      deadline: deadlineDateKey || undefined,
       schedule_after: scheduleAfter,
       hours_ranges: presetRanges,
       hours_start: presetBounds.start_minutes,
@@ -1079,7 +1170,7 @@ export default function App() {
       hours_end: presetBounds.end_minutes,
       hours_ranges: presetRanges,
       schedule_after: scheduleAfter,
-      deadline: draft.deadline || undefined,
+      deadline: deadlineDateKey || undefined,
       scheduled_date: placement?.scheduled_date ?? (existingTask?.scheduled_date ?? scheduleAfter),
       start_minutes: placement?.start_minutes ?? (existingTask?.start_minutes ?? presetBounds.start_minutes),
       done: existingTask?.done ?? false,
@@ -1978,15 +2069,15 @@ export default function App() {
                 <label className="modal-card">
                   <span>Schedule after</span>
                   <input
-                    type="date"
+                    type="datetime-local"
                     value={draft.scheduleAfter}
                     onChange={(event) => setDraft((prev) => ({ ...prev, scheduleAfter: event.target.value }))}
                   />
                 </label>
                 <label className="modal-card">
-                  <span>Due date</span>
+                  <span>Due date &amp; time</span>
                   <input
-                    type="date"
+                    type="datetime-local"
                     value={draft.deadline}
                     onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
                   />
@@ -2046,7 +2137,7 @@ export default function App() {
                               {stage.name}
                             </span>
 
-                            {/* Days — auto-suggested, user-adjustable in 0.5 steps */}
+                            {/* Duration — auto-suggested, user-adjustable ±15 min */}
                             <div className="stage-days-control">
                               <button
                                 type="button"
@@ -2057,13 +2148,13 @@ export default function App() {
                                     ...prev,
                                     workflowStages: prev.workflowStages.map((s) =>
                                       s.id === stage.id
-                                        ? { ...s, days: Math.max(0.5, +(s.days - 0.5).toFixed(1)) }
+                                        ? { ...s, minutes: Math.max(15, s.minutes - 15) }
                                         : s,
                                     ),
                                   }))
                                 }
                               >−</button>
-                              <span className="stage-days-val">{formatStageDays(stage.days)}</span>
+                              <span className="stage-days-val">{formatDuration(stage.minutes)}</span>
                               <button
                                 type="button"
                                 className="stage-days-btn"
@@ -2073,7 +2164,7 @@ export default function App() {
                                     ...prev,
                                     workflowStages: prev.workflowStages.map((s) =>
                                       s.id === stage.id
-                                        ? { ...s, days: +(s.days + 0.5).toFixed(1) }
+                                        ? { ...s, minutes: s.minutes + 15 }
                                         : s,
                                     ),
                                   }))
@@ -2102,8 +2193,8 @@ export default function App() {
 
                             {/* Auto-calculated dates */}
                             <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>
-                              {stage.enabled && stage.startDate
-                                ? `${formatDate(stage.startDate, { month: 'short', day: 'numeric' })} → ${formatDate(stage.endDate, { month: 'short', day: 'numeric' })}`
+                              {stage.enabled && stage.startDt
+                                ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}`
                                 : '—'}
                             </span>
                           </div>
@@ -2113,19 +2204,19 @@ export default function App() {
                         {(() => {
                           const enabledCalc = calculatedStages.filter((s) => s.enabled);
                           const last = enabledCalc[enabledCalc.length - 1];
-                          const totalDays = enabledCalc.reduce((sum, s) => sum + s.days, 0);
-                          const overDeadline = Boolean(draft.deadline && last?.endDate && last.endDate > draft.deadline);
+                          const totalMinutes = enabledCalc.reduce((sum, s) => sum + s.minutes, 0);
+                          const overDeadline = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
                           return (
                             <div className={`workflow-total ${overDeadline ? 'over-deadline' : ''}`}>
                               <span>
-                                {enabledCalc.length} stages · {formatStageDays(totalDays)} total
-                                {draft.deadline
-                                  ? ` of ${formatStageDays(daysBetweenKeys(draft.scheduleAfter, draft.deadline))} available`
+                                {enabledCalc.length} stages · {formatDuration(totalMinutes)} total
+                                {draft.deadline && draft.scheduleAfter
+                                  ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available`
                                   : ''}
                               </span>
-                              {last?.endDate ? (
+                              {last?.endDt ? (
                                 <span>
-                                  Est. done: {formatDate(last.endDate, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                  Est. done: {formatDt(last.endDt)}
                                   {overDeadline ? ' ⚠ past due date' : ''}
                                 </span>
                               ) : null}
