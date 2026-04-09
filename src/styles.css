@@ -1012,11 +1012,17 @@ button {
 
 .priority-dropzone {
   border-radius: 14px;
-  transition: background 120ms ease, box-shadow 120ms ease;
+  transition: background 120ms ease, box-shadow 120ms ease, outline 120ms ease;
 }
 
 .priority-dropzone:hover {
   background: rgba(22, 82, 240, 0.025);
+}
+
+.priority-dropzone.dnd-active {
+  background: rgba(22, 82, 240, 0.06);
+  outline: 2px dashed rgba(22, 82, 240, 0.45);
+  outline-offset: -2px;
 }
 
 .priority-group__header {
@@ -1101,14 +1107,36 @@ button {
   display: grid;
   grid-template-columns: 4px minmax(0, 1fr);
   overflow: hidden;
-  cursor: pointer;
-  transition: box-shadow 120ms ease, transform 100ms ease;
+  cursor: grab;
+  transition: box-shadow 120ms ease, transform 100ms ease, opacity 120ms ease;
   box-shadow: var(--shadow-xs);
+  user-select: none;
 }
 
 .priority-card:hover {
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
+}
+
+.priority-card.is-dragging-source {
+  opacity: 0.32;
+  transform: scale(0.98);
+  box-shadow: none;
+  pointer-events: none;
+}
+
+/* Ghost placeholder shown inside the hovered dropzone */
+.priority-ghost {
+  border-radius: 12px;
+  background: rgba(22, 82, 240, 0.07);
+  border: 2px dashed rgba(22, 82, 240, 0.35);
+  margin-bottom: 6px;
+  animation: ghost-in 0.12s ease;
+}
+
+@keyframes ghost-in {
+  from { opacity: 0; transform: scaleY(0.85); }
+  to   { opacity: 1; transform: scaleY(1); }
 }
 
 .priority-card.compact {

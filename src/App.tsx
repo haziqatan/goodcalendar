@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent, FormEvent } from 'react';
+import type { FormEvent } from 'react';
 import {
   BarChart3,
   CalendarRange,
@@ -540,7 +540,8 @@ export default function App() {
     hasSupabaseConfig ? 'Connecting to Supabase schedule…' : 'Local mode. Add Vercel env vars to sync across devices.',
   );
   const [statusMessage, setStatusMessage] = useState('Drag blocks across the planner to reschedule them.');
-  const [draggedPriorityTaskId, setDraggedPriorityTaskId] = useState<string | null>(null);
+  const [draggingPriorityTaskId, setDraggingPriorityTaskId] = useState<string | null>(null);
+  const [hoveredPriorityBucket, setHoveredPriorityBucket] = useState<PriorityBucket | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
   const [showBufferSettings, setShowBufferSettings] = useState(false);
@@ -1512,15 +1513,113 @@ export default function App() {
     await persistTaskUpdate(id, { priority }, previousTasks);
   };
 
-  const handlePriorityDrop = async (event: DragEvent<HTMLElement>, bucket: PriorityBucket) => {
-    event.preventDefault();
-    const taskId = event.dataTransfer.getData('text/priority-task-id') || draggedPriorityTaskId;
-    setDraggedPriorityTaskId(null);
-    if (!taskId) {
-      return;
-    }
+  const handlePriorityCardPointerDown = (task: TaskItem) => (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
 
-    await updateTaskPriority(taskId, bucket);
+    const sourceEl = e.currentTarget as HTMLElement;
+    const rect = sourceEl.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+
+    let clone: HTMLElement | null = null;
+    let ghost: HTMLElement | null = null;
+    let activeZone: Element | null = null;
+    let dragging = false;
+
+    const beginDrag = () => {
+      dragging = true;
+
+      // Suppress the next click so the edit modal doesn't fire on drop
+      const suppressClick = (ev: MouseEvent) => { ev.stopPropagation(); ev.preventDefault(); };
+      document.addEventListener('click', suppressClick, { capture: true, once: true });
+
+      clone = sourceEl.cloneNode(true) as HTMLElement;
+      clone.style.cssText = `
+        position:fixed;pointer-events:none;z-index:9999;
+        width:${rect.width}px;left:${rect.left}px;top:${rect.top}px;
+        transform:scale(1.04) rotate(-0.6deg);
+        box-shadow:0 14px 40px rgba(0,0,0,0.22),0 4px 12px rgba(0,0,0,0.12);
+        opacity:0.96;border-radius:10px;will-change:left,top;
+        transition:transform 0.1s ease,box-shadow 0.1s ease;
+      `;
+      document.body.appendChild(clone);
+      setDraggingPriorityTaskId(task.id);
+    };
+
+    const findZone = (x: number, y: number): Element | null => {
+      const zones = Array.from(document.querySelectorAll<HTMLElement>('.priority-dropzone[data-bucket]'));
+      for (const z of zones) {
+        const r = z.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return z;
+      }
+      // Magnetic snap: nearest zone within 80px
+      let nearest: Element | null = null;
+      let minDist = 80;
+      for (const z of zones) {
+        const r = z.getBoundingClientRect();
+        const dx = Math.max(r.left - x, 0, x - r.right);
+        const dy = Math.max(r.top - y, 0, y - r.bottom);
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDist) { minDist = dist; nearest = z; }
+      }
+      return nearest;
+    };
+
+    const setZone = (zone: Element | null) => {
+      if (zone === activeZone) return;
+      if (ghost) { ghost.remove(); ghost = null; }
+      if (activeZone) activeZone.classList.remove('dnd-active');
+      activeZone = zone;
+      if (!zone) { setHoveredPriorityBucket(null); return; }
+      zone.classList.add('dnd-active');
+      setHoveredPriorityBucket(zone.getAttribute('data-bucket') as PriorityBucket);
+      ghost = document.createElement('div');
+      ghost.className = 'priority-ghost';
+      ghost.style.height = `${sourceEl.offsetHeight}px`;
+      zone.appendChild(ghost);
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!dragging) {
+        if (Math.abs(e.clientX - startX) > 6 || Math.abs(e.clientY - startY) > 6) beginDrag();
+        return;
+      }
+      if (!clone) return;
+      clone.style.left = `${e.clientX - offsetX}px`;
+      clone.style.top = `${e.clientY - offsetY}px`;
+      setZone(findZone(e.clientX, e.clientY));
+    };
+
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('keydown', onKey);
+      if (ghost) { ghost.remove(); ghost = null; }
+      if (activeZone) { activeZone.classList.remove('dnd-active'); activeZone = null; }
+      if (clone) {
+        clone.style.transition = 'transform 0.15s ease,opacity 0.15s ease';
+        clone.style.transform = 'scale(0.92)';
+        clone.style.opacity = '0';
+        const c = clone; clone = null;
+        setTimeout(() => c.remove(), 170);
+      }
+      setDraggingPriorityTaskId(null);
+      setHoveredPriorityBucket(null);
+    };
+
+    const onUp = async () => {
+      const dropBucket = activeZone?.getAttribute('data-bucket') as PriorityBucket | undefined;
+      cleanup();
+      if (dragging && dropBucket) await updateTaskPriority(task.id, dropBucket);
+    };
+
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cleanup(); };
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('keydown', onKey);
   };
 
   const moveTask = async (taskId: string, dateKey: string, startMinutes: number) => {
@@ -1806,16 +1905,9 @@ export default function App() {
       return (
         <article
           key={task.id}
-          className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}`}
-          draggable
-          onDragStart={(event) => {
-            event.dataTransfer.setData('text/priority-task-id', task.id);
-            setDraggedPriorityTaskId(task.id);
-          }}
-          onDragEnd={() => setDraggedPriorityTaskId(null)}
-          onClick={() => {
-            openEditTaskModal(task);
-          }}
+          className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}${draggingPriorityTaskId === task.id ? ' is-dragging-source' : ''}`}
+          onPointerDown={handlePriorityCardPointerDown(task)}
+          onClick={() => openEditTaskModal(task)}
         >
           <div className="priority-card__accent" />
           <div className="priority-card__content">
@@ -2164,9 +2256,8 @@ export default function App() {
                     {bucketOrder.map((bucket) => (
                       <section
                         key={bucket}
-                        className="priority-group priority-dropzone"
-                        onDragOver={(event) => event.preventDefault()}
-                        onDrop={(event) => void handlePriorityDrop(event, bucket)}
+                        className={`priority-group priority-dropzone${hoveredPriorityBucket === bucket ? ' dnd-active' : ''}`}
+                        data-bucket={bucket}
                       >
                         <div className="priority-group__header">
                           <span>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</span>
@@ -2256,9 +2347,8 @@ export default function App() {
               {bucketOrder.map((bucket) => (
                 <section
                   key={bucket}
-                  className="priority-column priority-dropzone"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => void handlePriorityDrop(event, bucket)}
+                  className={`priority-column priority-dropzone${hoveredPriorityBucket === bucket ? ' dnd-active' : ''}`}
+                  data-bucket={bucket}
                 >
                   <div className="priority-column__header">
                     <strong>{bucket === 'critical' ? 'Critical' : `${bucket[0].toUpperCase()}${bucket.slice(1)} priority`}</strong>
