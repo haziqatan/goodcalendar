@@ -1841,36 +1841,39 @@ export default function App() {
             {railOpen ? (
             <aside className="planner-rail">
               <section className="rail-panel">
-                <div className="rail-heading">
-                  <strong>Selected day</strong>
-                  <span>{formatDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
-                </div>
-
-                <label className="search-field">
-                  <Search size={15} />
-                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for something…" />
-                </label>
-
-                {warnings.length > 0 ? (
-                  <div className="warning-stack">
-                    {warnings.slice(0, 3).map((warning) => (
-                      <article key={warning.id} className={`warning-pill ${warning.severity}`}>
-                        <strong>{warning.title}</strong>
-                        <p>{warning.detail}</p>
-                      </article>
-                    ))}
+                <div className="rail-panel__header">
+                  <div className="rail-heading">
+                    <strong>Selected day</strong>
+                    <span>{formatDate(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
                   </div>
-                ) : null}
 
-                <div className="rail-tabs">
-                  <button type="button" className={railTab === 'priorities' ? 'active' : ''} onClick={() => setRailTab('priorities')}>
-                    Priorities
-                  </button>
-                  <button type="button" className={railTab === 'tasks' ? 'active' : ''} onClick={() => setRailTab('tasks')}>
-                    Tasks
-                  </button>
+                  <label className="search-field">
+                    <Search size={15} />
+                    <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for something…" />
+                  </label>
+
+                  {warnings.length > 0 ? (
+                    <div className="warning-stack">
+                      {warnings.slice(0, 3).map((warning) => (
+                        <article key={warning.id} className={`warning-pill ${warning.severity}`}>
+                          <strong>{warning.title}</strong>
+                          <p>{warning.detail}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="rail-tabs">
+                    <button type="button" className={railTab === 'priorities' ? 'active' : ''} onClick={() => setRailTab('priorities')}>
+                      Priorities
+                    </button>
+                    <button type="button" className={railTab === 'tasks' ? 'active' : ''} onClick={() => setRailTab('tasks')}>
+                      Tasks
+                    </button>
+                  </div>
                 </div>
 
+                <div className="rail-panel__body">
                 {railTab === 'priorities' ? (
                   <div className="priority-groups compact">
                     {bucketOrder.map((bucket) => (
@@ -1945,6 +1948,7 @@ export default function App() {
                     )}
                   </div>
                 )}
+                </div>{/* rail-panel__body */}
               </section>
             </aside>
             ) : null}

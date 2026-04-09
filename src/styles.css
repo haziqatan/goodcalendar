@@ -758,17 +758,40 @@ button {
 /* ─── Rail / sidebar panel ─────────────────────────────────────────────────── */
 
 .planner-rail {
-  display: grid;
-  gap: 14px;
-  align-content: start;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .rail-panel {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.rail-panel__header {
+  flex-shrink: 0;
+  padding: 16px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border-radius: 18px 18px 0 0;
+}
+
+.rail-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 16px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
 .rail-heading {
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .rail-heading strong {
