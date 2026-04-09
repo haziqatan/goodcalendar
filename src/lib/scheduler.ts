@@ -1,4 +1,4 @@
-import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TimeRange } from '../types';
+import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TimeRange } from '../types';
 
 export const MINUTES_IN_DAY = 24 * 60;
 export const SNAP_MINUTES = 15;
@@ -6,6 +6,12 @@ export const AUTO_START_MINUTES = 8 * 60;
 export const AUTO_END_MINUTES = 20 * 60;
 export const PIXELS_PER_MINUTE = 1.05;
 const AUTO_LOOKAHEAD_DAYS = 7;
+const DEFAULT_BUFFER_SETTINGS: BufferSettings = {
+  before_events: 10,
+  after_events: 10,
+  between_task_habits: 15,
+  travel_time: 0,
+};
 
 const priorityWeight: Record<TaskPriority, number> = {
   critical: 0,
@@ -91,6 +97,26 @@ function overlaps(aStart: number, aDuration: number, bStart: number, bDuration: 
   return aStart < bStart + bDuration && bStart < aStart + aDuration;
 }
 
+function isTaskOrHabit(type: TaskItem['type']) {
+  return type === 'task' || type === 'buffer';
+}
+
+function pairGapMinutes(
+  candidateType: TaskItem['type'],
+  existingType: TaskItem['type'],
+  bufferSettings: BufferSettings,
+  includeFlexibleBuffer: boolean,
+) {
+  let gap = bufferSettings.before_events + bufferSettings.after_events;
+  if (isTaskOrHabit(candidateType) || isTaskOrHabit(existingType)) {
+    gap += bufferSettings.between_task_habits;
+  }
+  if (includeFlexibleBuffer) {
+    gap += bufferSettings.travel_time;
+  }
+  return gap;
+}
+
 export function findConflict(
   tasks: TaskItem[],
   dateKey: string,
@@ -109,17 +135,28 @@ export function findConflict(
 function findSlotOnDate(
   tasks: TaskItem[],
   dateKey: string,
-  duration: number,
+  task: Pick<TaskItem, 'duration' | 'type'>,
   startMinutes: number,
   windowStart: number,
   windowEnd: number,
+  bufferSettings: BufferSettings,
+  includeFlexibleBuffer: boolean,
   excludeId?: string,
 ) {
-  const normalizedWindowStart = clampStart(windowStart, duration);
+  const normalizedWindowStart = clampStart(windowStart, task.duration);
   const normalizedWindowEnd = Math.min(windowEnd, MINUTES_IN_DAY);
-  const firstStart = clampStart(Math.max(normalizedWindowStart, startMinutes), duration);
-  for (let cursor = firstStart; cursor + duration <= normalizedWindowEnd; cursor += SNAP_MINUTES) {
-    if (!findConflict(tasks, dateKey, cursor, duration, excludeId)) {
+  const firstStart = clampStart(Math.max(normalizedWindowStart, startMinutes), task.duration);
+  for (let cursor = firstStart; cursor + task.duration <= normalizedWindowEnd; cursor += SNAP_MINUTES) {
+    const collision = tasks.find((entry) => {
+      if (entry.id === excludeId || entry.scheduled_date !== dateKey) {
+        return false;
+      }
+
+      const gap = pairGapMinutes(task.type, entry.type, bufferSettings, includeFlexibleBuffer);
+      return overlaps(cursor, task.duration, entry.start_minutes - gap, entry.duration + gap * 2);
+    });
+
+    if (!collision) {
       return cursor;
     }
   }
@@ -281,11 +318,49 @@ function pushBlock(blocksByDate: Map<string, ScheduleBlock[]>, block: ScheduleBl
   blocksByDate.set(block.scheduled_date, current);
 }
 
+function findBufferedGaps(
+  blocks: ScheduleBlock[],
+  candidateType: TaskItem['type'],
+  windowStart: number,
+  windowEnd: number,
+  bufferSettings: BufferSettings,
+  includeFlexibleBuffer: boolean,
+) {
+  const relevant = [...blocks]
+    .filter((block) => block.start_minutes < windowEnd && block.start_minutes + block.duration > windowStart)
+    .map((block) => {
+      const gap = pairGapMinutes(candidateType, block.type, bufferSettings, includeFlexibleBuffer);
+      return {
+        start: Math.max(windowStart, block.start_minutes - gap),
+        end: Math.min(windowEnd, block.start_minutes + block.duration + gap),
+      };
+    })
+    .sort((left, right) => left.start - right.start);
+
+  const gaps: Array<{ start: number; end: number }> = [];
+  let cursor = windowStart;
+
+  relevant.forEach((block) => {
+    if (block.start > cursor) {
+      gaps.push({ start: cursor, end: block.start });
+    }
+    cursor = Math.max(cursor, block.end);
+  });
+
+  if (cursor < windowEnd) {
+    gaps.push({ start: cursor, end: windowEnd });
+  }
+
+  return gaps;
+}
+
 function findDiscretePlacement(
   task: TaskItem,
   blocksByDate: Map<string, ScheduleBlock[]>,
   startDate: string,
   endDate: string,
+  bufferSettings: BufferSettings,
+  includeFlexibleBuffer: boolean,
 ) {
   const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
   const preferred = task.scheduled_date;
@@ -304,7 +379,7 @@ function findDiscretePlacement(
     const windows = getTaskWindows(task);
 
     for (const window of windows) {
-      const gaps = findFreeGaps(dateBlocks, window.start_minutes, window.end_minutes);
+      const gaps = findBufferedGaps(dateBlocks, task.type, window.start_minutes, window.end_minutes, bufferSettings, includeFlexibleBuffer);
       const fittingSlots = gaps
         .filter((gap) => gap.end - gap.start >= task.duration)
         .map((gap) => {
@@ -360,7 +435,9 @@ function allocateSplitBlocks(
   blocksByDate: Map<string, ScheduleBlock[]>,
   startDate: string,
   endDate: string,
+  bufferSettings: BufferSettings,
   allowPartial: boolean,
+  includeFlexibleBuffer: boolean,
 ) {
   const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
   const { minDuration, maxDuration } = normalizeChunkBounds(task);
@@ -378,7 +455,7 @@ function allocateSplitBlocks(
         break;
       }
 
-      const gaps = findFreeGaps(dateBlocks, window.start_minutes, window.end_minutes);
+      const gaps = findBufferedGaps(dateBlocks, task.type, window.start_minutes, window.end_minutes, bufferSettings, includeFlexibleBuffer);
       for (const gap of gaps) {
         if (remaining <= 0) {
           break;
@@ -470,7 +547,12 @@ function fitChunkDuration(remaining: number, gapSize: number, minDuration: numbe
   return null;
 }
 
-export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDate: string): ScheduleBlock[] {
+export function buildScheduleBlocks(
+  tasks: TaskItem[],
+  startDate: string,
+  endDate: string,
+  bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
+): ScheduleBlock[] {
   const blocksByDate = new Map<string, ScheduleBlock[]>();
   const lockedTasks = sortTasksChronologically(tasks.filter((task) => task.done));
   const habitTasks = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'buffer')).sort(compareHabitPreference);
@@ -485,24 +567,32 @@ export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDat
   const optimizedBlocks: ScheduleBlock[] = lockedTasks.map(toBlock);
 
   habitTasks.forEach((task) => {
-    const placement = findDiscretePlacement(task, blocksByDate, startDate, endDate);
+    const placement =
+      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, true) ??
+      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, false);
+    if (!placement) {
+      return;
+    }
     const block = toBlock({
       ...task,
-      scheduled_date: placement?.scheduled_date ?? task.scheduled_date,
-      start_minutes: placement?.start_minutes ?? task.start_minutes,
+      scheduled_date: placement.scheduled_date,
+      start_minutes: placement.start_minutes,
     });
     pushBlock(blocksByDate, block);
     optimizedBlocks.push(block);
   });
 
   taskItems.forEach((task) => {
-    const blocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, false);
+    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, true);
+    const blocks = firstPassBlocks.length > 0
+      ? firstPassBlocks
+      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, false);
     if (blocks.length > 0) {
       optimizedBlocks.push(...blocks);
       return;
     }
 
-    const fallback = findPlacement(tasks, task, task.scheduled_date, preferredStart(task), task.id);
+    const fallback = findPlacement(tasks, task, task.scheduled_date, preferredStart(task), bufferSettings, task.id);
     if (!fallback) {
       return;
     }
@@ -517,7 +607,10 @@ export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDat
   });
 
   focusItems.forEach((task) => {
-    const blocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, true);
+    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, true);
+    const blocks = firstPassBlocks.length > 0
+      ? firstPassBlocks
+      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, false);
     optimizedBlocks.push(...blocks);
   });
 
@@ -531,63 +624,58 @@ export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDat
 
 export function findPlacement(
   tasks: TaskItem[],
-  task: Pick<TaskItem, 'duration' | 'deadline' | 'schedule_after' | 'hours_ranges' | 'hours_start' | 'hours_end'>,
+  task: Pick<TaskItem, 'type' | 'duration' | 'deadline' | 'schedule_after' | 'hours_ranges' | 'hours_start' | 'hours_end'>,
   preferredDate: string,
   preferredStart: number,
+  bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
   excludeId?: string,
 ) {
   const earliestDate = task.schedule_after && task.schedule_after > preferredDate ? task.schedule_after : preferredDate;
   const deadline = task.deadline && task.deadline >= earliestDate ? task.deadline : earliestDate;
   const windows = getTaskWindows(task);
 
-  for (let offset = 0; offset <= AUTO_LOOKAHEAD_DAYS; offset += 1) {
-    const dateKey = addDays(earliestDate, offset);
-    const slot = windows
-      .map((window) =>
-        findSlotOnDate(
-          tasks,
-          dateKey,
-          task.duration,
-          offset === 0 ? preferredStart : window.start_minutes,
-          window.start_minutes,
-          window.end_minutes,
-          excludeId,
-        ),
-      )
-      .find((value): value is number => value !== null);
-    if (slot !== undefined) {
-      return {
-        scheduled_date: dateKey,
-        start_minutes: slot,
-        afterDeadline: Boolean(task.deadline && dateKey > deadline),
-      };
+  const attempt = (includeFlexibleBuffer: boolean, searchStartDate: string, forceAfterDeadline = false) => {
+    for (let offset = 0; offset <= AUTO_LOOKAHEAD_DAYS; offset += 1) {
+      const dateKey = addDays(searchStartDate, offset);
+      const slot = windows
+        .map((window) =>
+          findSlotOnDate(
+            tasks,
+            dateKey,
+            task,
+            offset === 0 ? preferredStart : window.start_minutes,
+            window.start_minutes,
+            window.end_minutes,
+            bufferSettings,
+            includeFlexibleBuffer,
+            excludeId,
+          ),
+        )
+        .find((value): value is number => value !== null);
+      if (slot !== undefined) {
+        return {
+          scheduled_date: dateKey,
+          start_minutes: slot,
+          afterDeadline: forceAfterDeadline || Boolean(task.deadline && dateKey > deadline),
+        };
+      }
+      if (!forceAfterDeadline && dateKey >= deadline && task.deadline) {
+        break;
+      }
     }
-    if (dateKey >= deadline && task.deadline) {
-      break;
-    }
+    return null;
+  };
+
+  const firstPass = attempt(true, earliestDate) ?? attempt(false, earliestDate);
+  if (firstPass) {
+    return firstPass;
   }
 
   if (!task.deadline) {
     return null;
   }
 
-  for (let offset = 0; offset <= AUTO_LOOKAHEAD_DAYS; offset += 1) {
-    const dateKey = addDays(deadline, offset);
-    const slot = windows
-      .map((window) =>
-        findSlotOnDate(tasks, dateKey, task.duration, window.start_minutes, window.start_minutes, window.end_minutes, excludeId),
-      )
-      .find((value): value is number => value !== null);
-    if (slot !== undefined) {
-      return {
-        scheduled_date: dateKey,
-        start_minutes: slot,
-        afterDeadline: true,
-      };
-    }
-  }
-
-  return null;
+  return attempt(true, deadline, true) ?? attempt(false, deadline, true);
 }
 
 function compareDeadline(left?: string, right?: string) {
@@ -603,68 +691,68 @@ function compareDeadline(left?: string, right?: string) {
   return 0;
 }
 
-export function autoPlaceDay(tasks: TaskItem[], dateKey: string) {
-  const stationaryTasks = sortTasksChronologically(tasks.filter((task) => task.scheduled_date !== dateKey));
-  const orderedDayItems = sortTasksChronologically(tasks)
-    .filter((task) => task.scheduled_date === dateKey)
-    .sort((left, right) => {
-      if (left.done !== right.done) {
-        return Number(left.done) - Number(right.done);
-      }
-      const priorityDifference = priorityWeight[left.priority] - priorityWeight[right.priority];
-      if (priorityDifference !== 0) {
-        return priorityDifference;
-      }
-      const deadlineDifference = compareDeadline(left.deadline, right.deadline);
-      if (deadlineDifference !== 0) {
-        return deadlineDifference;
-      }
-      return left.start_minutes - right.start_minutes;
-    });
+export function autoPlaceDay(tasks: TaskItem[], dateKey: string, bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS) {
+  const seeds = [
+    dateKey,
+    ...tasks.map((task) => task.schedule_after ?? task.scheduled_date),
+  ];
+  const planningStart = seeds.reduce((earliest, current) => (current < earliest ? current : earliest));
+  const planningEnd = addDays(
+    tasks
+      .map((task) => task.deadline ?? task.scheduled_date)
+      .reduce((latest, current) => (current > latest ? current : latest), dateKey),
+    14,
+  );
+  const optimizedBlocks = buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings);
+  const firstBlocks = new Map<string, ScheduleBlock>();
+
+  optimizedBlocks.forEach((block) => {
+    if (!firstBlocks.has(block.task_id)) {
+      firstBlocks.set(block.task_id, block);
+    }
+  });
 
   let moved = 0;
   let unresolved = 0;
-  let searchFrom = AUTO_START_MINUTES;
-  const placedTasks: TaskItem[] = [];
+  const nextTasks = sortTasksChronologically(
+    tasks.map((task) => {
+      if (task.done) {
+        return task;
+      }
 
-  orderedDayItems.forEach((task) => {
-    const windows = getTaskWindows(task);
-    const slot = windows
-      .map((window) =>
-        findSlotOnDate(
-          [...stationaryTasks, ...placedTasks],
-          dateKey,
-          task.duration,
-          Math.max(searchFrom, window.start_minutes),
-          window.start_minutes,
-          window.end_minutes,
-          task.id,
-        ),
-      )
-      .find((value): value is number => value !== null);
-    if (slot === undefined) {
-      unresolved += 1;
-      placedTasks.push(task);
-      return;
-    }
+      const firstBlock = firstBlocks.get(task.id);
+      if (!firstBlock) {
+        if (task.scheduled_date === dateKey) {
+          unresolved += 1;
+        }
+        return task;
+      }
 
-    searchFrom = slot + task.duration;
-    if (slot !== task.start_minutes) {
-      moved += 1;
-      placedTasks.push({ ...task, start_minutes: slot });
-      return;
-    }
-    placedTasks.push(task);
-  });
+      if (task.scheduled_date === dateKey && (task.scheduled_date !== firstBlock.scheduled_date || task.start_minutes !== firstBlock.start_minutes)) {
+        moved += 1;
+      }
+
+      return {
+        ...task,
+        scheduled_date: firstBlock.scheduled_date,
+        start_minutes: firstBlock.start_minutes,
+      };
+    }),
+  );
 
   return {
-    tasks: sortTasksChronologically([...stationaryTasks, ...placedTasks]),
+    tasks: nextTasks,
     moved,
     unresolved,
   };
 }
 
-export function buildWarnings(tasks: TaskItem[], todayKey: string, selectedDate: string): ScheduleWarning[] {
+export function buildWarnings(
+  tasks: TaskItem[],
+  todayKey: string,
+  selectedDate: string,
+  bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
+): ScheduleWarning[] {
   const warnings: ScheduleWarning[] = [];
   const activeTasks = tasks.filter((task) => !task.done);
   const planningDates = activeTasks.length > 0
@@ -680,7 +768,7 @@ export function buildWarnings(tasks: TaskItem[], todayKey: string, selectedDate:
         ),
       }
     : null;
-  const optimizedBlocks = planningDates ? buildScheduleBlocks(activeTasks, planningDates.start, planningDates.end) : [];
+  const optimizedBlocks = planningDates ? buildScheduleBlocks(activeTasks, planningDates.start, planningDates.end, bufferSettings) : [];
   const blocksByTask = new Map<string, ScheduleBlock[]>();
 
   optimizedBlocks.forEach((block) => {

@@ -230,6 +230,17 @@ button {
   color: var(--muted);
 }
 
+.nav-child-btn {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.nav-child-btn:hover {
+  color: var(--text);
+}
+
 /* ─── Workspace ─────────────────────────────────────────────────────────────── */
 
 .workspace {
@@ -1356,6 +1367,12 @@ button {
   letter-spacing: 0.04em;
 }
 
+.modal-card small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .modal-card strong,
 .hours-card__label strong,
 .settings-modal__header strong {
@@ -1593,6 +1610,12 @@ button {
   border-top: 1px solid var(--line-soft);
 }
 
+.buffer-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 /* ─── Responsive ───────────────────────────────────────────────────────────── */
 
 @media (max-width: 1300px) {
@@ -1638,6 +1661,7 @@ button {
   }
 
   .modal-grid,
+  .buffer-settings-grid,
   .preset-range-row {
     grid-template-columns: 1fr;
   }

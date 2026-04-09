@@ -46,7 +46,7 @@ import {
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange } from './types';
+import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -80,9 +80,16 @@ interface EmojiClickDetail {
 }
 
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
+const BUFFER_SETTINGS_STORAGE_KEY = 'goodcalendar-buffer-settings';
 const TIME_GUTTER = 80;
 const DURATION_STEP = 15;
 const BOARD_TOP_PADDING = 18;
+const DEFAULT_BUFFER_SETTINGS: BufferSettings = {
+  before_events: 10,
+  after_events: 10,
+  between_task_habits: 15,
+  travel_time: 0,
+};
 const DEFAULT_HOUR_PRESETS: HourPreset[] = [
   {
     id: 'working-hours',
@@ -283,6 +290,14 @@ function buildCompactSectionKey(bucket: PriorityBucket, type: TaskGroupType) {
   return `${bucket}:${type}`;
 }
 
+function clampBufferDuration(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(value / 5) * 5);
+}
+
 function clampDuration(value: number) {
   return Math.max(DURATION_STEP, Math.round(value / DURATION_STEP) * DURATION_STEP);
 }
@@ -338,6 +353,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const [hourPresets, setHourPresets] = useState<HourPreset[]>(DEFAULT_HOUR_PRESETS);
+  const [bufferSettings, setBufferSettings] = useState<BufferSettings>(DEFAULT_BUFFER_SETTINGS);
   const [tasks, setTasks] = useState<TaskItem[]>(hasSupabaseConfig ? [] : starterTasks);
   const [loading, setLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState(
@@ -348,6 +364,7 @@ export default function App() {
   const [draggedPriorityTaskId, setDraggedPriorityTaskId] = useState<string | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
+  const [showBufferSettings, setShowBufferSettings] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [collapsedCompactSections, setCollapsedCompactSections] = useState<Record<string, boolean>>({});
@@ -385,8 +402,38 @@ export default function App() {
     if (typeof window === 'undefined') {
       return;
     }
+
+    const stored = window.localStorage.getItem(BUFFER_SETTINGS_STORAGE_KEY);
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as Partial<BufferSettings>;
+      setBufferSettings({
+        before_events: parsed.before_events ?? DEFAULT_BUFFER_SETTINGS.before_events,
+        after_events: parsed.after_events ?? DEFAULT_BUFFER_SETTINGS.after_events,
+        between_task_habits: parsed.between_task_habits ?? DEFAULT_BUFFER_SETTINGS.between_task_habits,
+        travel_time: parsed.travel_time ?? DEFAULT_BUFFER_SETTINGS.travel_time,
+      });
+    } catch {
+      window.localStorage.removeItem(BUFFER_SETTINGS_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
     window.localStorage.setItem(HOURS_STORAGE_KEY, JSON.stringify(hourPresets));
   }, [hourPresets]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(BUFFER_SETTINGS_STORAGE_KEY, JSON.stringify(bufferSettings));
+  }, [bufferSettings]);
 
   useEffect(() => {
     if (!showEmojiPicker || !emojiPickerHostRef.current || typeof window === 'undefined') {
@@ -480,8 +527,8 @@ export default function App() {
   }, [tasks, weekDates]);
 
   const optimizedBlocks = useMemo<ScheduleBlock[]>(
-    () => buildScheduleBlocks(tasks, planningStart, planningEnd),
-    [tasks, planningStart, planningEnd],
+    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings),
+    [tasks, planningStart, planningEnd, bufferSettings],
   );
 
   const blocksByTaskId = useMemo(() => {
@@ -505,8 +552,8 @@ export default function App() {
   );
 
   const warnings = useMemo<ScheduleWarning[]>(
-    () => buildWarnings(tasks, todayKey, selectedDate),
-    [tasks, todayKey, selectedDate],
+    () => buildWarnings(tasks, todayKey, selectedDate, bufferSettings),
+    [tasks, todayKey, selectedDate, bufferSettings],
   );
 
   const filteredOpenTasks = useMemo(() => {
@@ -758,6 +805,7 @@ export default function App() {
 
     const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) : null;
     const placementContext = {
+      type: draft.type,
       duration,
       deadline: draft.deadline || undefined,
       schedule_after: scheduleAfter,
@@ -771,6 +819,7 @@ export default function App() {
       placementContext,
       existingTask?.scheduled_date ?? selectedDate,
       existingTask?.start_minutes ?? presetBounds.start_minutes,
+      bufferSettings,
       editingTaskId ?? undefined,
     );
 
@@ -800,7 +849,7 @@ export default function App() {
       const previewStart = previewStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
       const previewEndSeed = item.deadline ?? item.scheduled_date;
       const previewEnd = addDays(previewEndSeed > planningEnd ? previewEndSeed : planningEnd, 14);
-      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd).filter((block) => block.task_id === item.id);
+      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd, bufferSettings).filter((block) => block.task_id === item.id);
 
       if (previewBlocks.length === 0) {
         setStatusMessage('No conflict-free schedule was found for the selected hours and deadline window.');
@@ -876,17 +925,18 @@ export default function App() {
   };
 
   const deleteTask = async () => {
-    if (!editingTaskId) {
+    const targetId = editingTaskId;
+    if (!targetId) {
       return;
     }
 
     const previousTasks = tasks;
-    const target = tasks.find((task) => task.id === editingTaskId);
+    const target = tasks.find((task) => task.id === targetId);
     if (!target) {
       return;
     }
 
-    setTasks((prev) => prev.filter((task) => task.id !== editingTaskId));
+    setTasks((prev) => prev.filter((task) => task.id !== targetId));
     closeTaskModal();
     setStatusMessage(`${target.title} deleted.`);
 
@@ -894,7 +944,7 @@ export default function App() {
       return;
     }
 
-    const { error } = await supabase.from('schedule_items').delete().eq('id', editingTaskId);
+    const { error } = await supabase.from('schedule_items').delete().eq('id', targetId);
     if (error) {
       setSyncMessage(`Delete failed: ${error.message}`);
       setTasks(previousTasks);
@@ -954,6 +1004,7 @@ export default function App() {
       ? findPlacement(
           tasks,
           {
+            type: task.type,
             duration: task.duration,
             deadline: task.deadline,
             schedule_after: task.schedule_after,
@@ -963,6 +1014,7 @@ export default function App() {
           },
           dateKey,
           desiredStart,
+          bufferSettings,
           task.id,
         )
       : { scheduled_date: dateKey, start_minutes: desiredStart, afterDeadline: Boolean(task.deadline && dateKey > task.deadline) };
@@ -1029,7 +1081,7 @@ export default function App() {
 
   const handleAutoPlaceDay = async () => {
     const previousTasks = tasks;
-    const result = autoPlaceDay(tasks, selectedDate);
+    const result = autoPlaceDay(tasks, selectedDate, bufferSettings);
     setTasks(result.tasks);
     setStatusMessage(
       result.unresolved > 0
@@ -1220,9 +1272,15 @@ export default function App() {
                 {item.children ? (
                   <div className="nav-children">
                     {item.children.map((child) => (
-                      <div key={child} className="nav-child">
-                        {child}
-                      </div>
+                      child === 'Buffers' ? (
+                        <button key={child} type="button" className="nav-child nav-child-btn" onClick={() => setShowBufferSettings(true)}>
+                          {child}
+                        </button>
+                      ) : (
+                        <div key={child} className="nav-child">
+                          {child}
+                        </div>
+                      )
                     ))}
                   </div>
                 ) : null}
@@ -1801,6 +1859,78 @@ export default function App() {
                 Add custom hours
               </button>
               <button type="button" className="primary-btn" onClick={() => setShowHoursSettings(false)}>
+                Done
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {showBufferSettings ? (
+        <div className="modal-backdrop" onClick={() => setShowBufferSettings(false)}>
+          <section className="settings-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-modal__header">
+              <div>
+                <strong>Buffer settings</strong>
+                <p>Protect spacing before events, after events, between tasks and habits, and optional travel time.</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setShowBufferSettings(false)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="buffer-settings-grid">
+              <label className="modal-card">
+                <span>Before events</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={bufferSettings.before_events}
+                  onChange={(event) => setBufferSettings((current) => ({ ...current, before_events: clampBufferDuration(Number(event.target.value)) }))}
+                />
+                <small>Suggested: 5, 10, 15, 30, 60 mins</small>
+              </label>
+              <label className="modal-card">
+                <span>After events</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={bufferSettings.after_events}
+                  onChange={(event) => setBufferSettings((current) => ({ ...current, after_events: clampBufferDuration(Number(event.target.value)) }))}
+                />
+                <small>Suggested: 5, 10, 15, 30, 60 mins</small>
+              </label>
+              <label className="modal-card">
+                <span>Between tasks and habits</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={bufferSettings.between_task_habits}
+                  onChange={(event) => setBufferSettings((current) => ({ ...current, between_task_habits: clampBufferDuration(Number(event.target.value)) }))}
+                />
+                <small>Protected whenever possible during re-optimization.</small>
+              </label>
+              <label className="modal-card">
+                <span>Travel time</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={bufferSettings.travel_time}
+                  onChange={(event) => setBufferSettings((current) => ({ ...current, travel_time: clampBufferDuration(Number(event.target.value)) }))}
+                />
+                <small>Optional flexible buffer removed first when space is tight.</small>
+              </label>
+            </div>
+
+            <div className="settings-modal__actions">
+              <button type="button" className="ghost-btn" onClick={() => setBufferSettings(DEFAULT_BUFFER_SETTINGS)}>
+                Reset defaults
+              </button>
+              <button type="button" className="primary-btn" onClick={() => setShowBufferSettings(false)}>
                 Done
               </button>
             </div>

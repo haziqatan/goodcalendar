@@ -7,6 +7,13 @@ export interface TimeRange {
   end_minutes: number;
 }
 
+export interface BufferSettings {
+  before_events: number;
+  after_events: number;
+  between_task_habits: number;
+  travel_time: number;
+}
+
 export interface TaskItem {
   id: string;
   title: string;
