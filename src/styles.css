@@ -839,6 +839,62 @@ button {
   color: var(--muted);
 }
 
+.compact-priority-sections {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-priority-section {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-section-toggle {
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  color: var(--text-2);
+}
+
+.compact-section-toggle span {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.compact-section-toggle small {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+
+.compact-section-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.compact-section-toggle.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.compact-section-cards {
+  display: grid;
+  gap: 8px;
+}
+
 /* ─── Priority cards ───────────────────────────────────────────────────────── */
 
 .priority-card {
@@ -896,6 +952,11 @@ button {
   align-items: flex-start;
 }
 
+.priority-card__top > div {
+  display: grid;
+  gap: 6px;
+}
+
 .priority-card__group {
   display: inline-block;
   font-size: 0.76rem;
@@ -903,7 +964,7 @@ button {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 3px;
+  margin-bottom: 0;
 }
 
 .priority-card strong {

@@ -52,6 +52,7 @@ type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
 type PriorityBucket = 'critical' | TaskPriority;
 type PresetKind = 'working' | 'personal' | 'custom';
+type TaskGroupType = TaskType;
 
 interface HourPreset {
   id: string;
@@ -181,6 +182,7 @@ const navSecondary = [
 ];
 
 const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
+const taskGroupOrder: TaskGroupType[] = ['buffer', 'task', 'focus'];
 
 function normalizeRanges(ranges?: Array<Partial<TimeRange> | null | undefined>) {
   const normalized = (ranges ?? [])
@@ -272,9 +274,13 @@ function sortPriorityTasks(tasks: TaskItem[]) {
 }
 
 function taskTypeLabel(type: TaskType) {
-  if (type === 'focus') return 'Focus';
-  if (type === 'buffer') return 'Buffer';
-  return 'Task';
+  if (type === 'focus') return 'Focus Time';
+  if (type === 'buffer') return 'Habits';
+  return 'Tasks';
+}
+
+function buildCompactSectionKey(bucket: PriorityBucket, type: TaskGroupType) {
+  return `${bucket}:${type}`;
 }
 
 function clampDuration(value: number) {
@@ -344,6 +350,7 @@ export default function App() {
   const [showHoursSettings, setShowHoursSettings] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [collapsedCompactSections, setCollapsedCompactSections] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState<TaskDraft>(buildDraft(todayKey, DEFAULT_HOUR_PRESETS[0].id));
   const emojiPickerHostRef = useRef<HTMLDivElement | null>(null);
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -527,6 +534,55 @@ export default function App() {
 
     return grouped;
   }, [filteredOpenTasks, todayKey]);
+
+  const compactGroupedTasks = useMemo(() => {
+    const grouped: Record<PriorityBucket, Record<TaskGroupType, TaskItem[]>> = {
+      critical: { buffer: [], task: [], focus: [] },
+      high: { buffer: [], task: [], focus: [] },
+      medium: { buffer: [], task: [], focus: [] },
+      low: { buffer: [], task: [], focus: [] },
+    };
+
+    const compareWithinType = (left: TaskItem, right: TaskItem) => {
+      const leftBlock = (blocksByTaskId.get(left.id) ?? [])[0];
+      const rightBlock = (blocksByTaskId.get(right.id) ?? [])[0];
+      const leftScheduledDate = leftBlock?.scheduled_date ?? left.scheduled_date;
+      const rightScheduledDate = rightBlock?.scheduled_date ?? right.scheduled_date;
+      if (leftScheduledDate !== rightScheduledDate) {
+        return leftScheduledDate.localeCompare(rightScheduledDate);
+      }
+
+      const leftStart = leftBlock?.start_minutes ?? left.start_minutes;
+      const rightStart = rightBlock?.start_minutes ?? right.start_minutes;
+      if (leftStart !== rightStart) {
+        return leftStart - rightStart;
+      }
+
+      const leftDeadline = left.deadline ?? '9999-12-31';
+      const rightDeadline = right.deadline ?? '9999-12-31';
+      if (leftDeadline !== rightDeadline) {
+        return leftDeadline.localeCompare(rightDeadline);
+      }
+
+      if (left.done !== right.done) {
+        return Number(left.done) - Number(right.done);
+      }
+
+      return left.title.localeCompare(right.title);
+    };
+
+    filteredOpenTasks.forEach((task) => {
+      grouped[taskBucket(task, todayKey)][task.type].push(task);
+    });
+
+    bucketOrder.forEach((bucket) => {
+      taskGroupOrder.forEach((type) => {
+        grouped[bucket][type] = [...grouped[bucket][type]].sort(compareWithinType);
+      });
+    });
+
+    return grouped;
+  }, [blocksByTaskId, filteredOpenTasks, todayKey]);
 
   const scheduledMinutes = useMemo(
     () => weekTasks.filter((task) => !task.done).reduce((sum, task) => sum + task.duration, 0),
@@ -1058,6 +1114,14 @@ export default function App() {
     }));
   };
 
+  const toggleCompactSection = (bucket: PriorityBucket, type: TaskGroupType) => {
+    const key = buildCompactSectionKey(bucket, type);
+    setCollapsedCompactSections((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+
   const renderPriorityCard = (task: TaskItem, compact = false) => (
     (() => {
       const taskBlocks = blocksByTaskId.get(task.id) ?? [];
@@ -1365,7 +1429,34 @@ export default function App() {
                         {groupedTasks[bucket].length === 0 ? (
                           <p className="empty-note">No items</p>
                         ) : (
-                          groupedTasks[bucket].slice(0, 4).map((task) => renderPriorityCard(task, true))
+                          <div className="compact-priority-sections">
+                            {taskGroupOrder
+                              .filter((type) => compactGroupedTasks[bucket][type].length > 0)
+                              .map((type) => {
+                                const sectionKey = buildCompactSectionKey(bucket, type);
+                                const collapsed = collapsedCompactSections[sectionKey] ?? false;
+                                const sectionTasks = compactGroupedTasks[bucket][type];
+
+                                return (
+                                  <section key={sectionKey} className="compact-priority-section">
+                                    <button
+                                      type="button"
+                                      className={`compact-section-toggle ${collapsed ? 'collapsed' : ''}`}
+                                      onClick={() => toggleCompactSection(bucket, type)}
+                                    >
+                                      <span>{taskTypeLabel(type)}</span>
+                                      <small>{sectionTasks.length}</small>
+                                      <ChevronDown size={14} />
+                                    </button>
+                                    {!collapsed ? (
+                                      <div className="compact-section-cards">
+                                        {sectionTasks.map((task) => renderPriorityCard(task, true))}
+                                      </div>
+                                    ) : null}
+                                  </section>
+                                );
+                              })}
+                          </div>
                         )}
                       </section>
                     ))}
