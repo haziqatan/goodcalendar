@@ -18,9 +18,9 @@ export interface WorkflowStage {
   id: string;
   name: string;
   enabled: boolean;
-  minDays: number;  // 0.5 = 4 h, 1 = 1 full working day
-  maxDays: number;
-  hourPresetId: string;  // which scheduling window this stage uses
+  days: number;        // auto-suggested (proportional), user-editable; 0.5 = 4 h
+  weight: number;      // relative weight for proportional auto-distribution
+  hourPresetId: string;
 }
 
 export interface WorkflowConfig {

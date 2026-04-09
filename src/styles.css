@@ -1672,11 +1672,11 @@ button {
   scrollbar-color: var(--line) transparent;
 }
 
-/* 6 columns: enable | name | min | max | hours | dates */
+/* 5 columns: enable | name | days | hours | dates */
 .workflow-stages-header,
 .workflow-stage-row {
   display: grid;
-  grid-template-columns: 28px minmax(160px, 1fr) 82px 82px 130px 130px;
+  grid-template-columns: 28px minmax(160px, 1fr) 86px 130px 140px;
   gap: 6px;
   align-items: center;
   padding: 7px 14px;

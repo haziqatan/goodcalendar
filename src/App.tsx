@@ -84,31 +84,35 @@ interface EmojiClickDetail {
 const HOURS_STORAGE_KEY = 'goodcalendar-hour-presets';
 const BUFFER_SETTINGS_STORAGE_KEY = 'goodcalendar-buffer-settings';
 
+// weight = relative share of total time; days = auto-calculated, user-editable
 const DEFAULT_WORKFLOW_STAGES: WorkflowStage[] = [
-  { id: 'req-gathering',      name: 'Requirement Gathering (with client)', enabled: true,  minDays: 2,   maxDays: 7,   hourPresetId: 'working-hours' },
-  { id: 'prd-creation',       name: 'PRD Creation',                        enabled: true,  minDays: 1,   maxDays: 2,   hourPresetId: 'working-hours' },
-  { id: 'po-approval-prd',    name: 'PO Approval (PRD)',                   enabled: true,  minDays: 1,   maxDays: 1,   hourPresetId: 'working-hours' },
-  { id: 'design',             name: 'Design',                              enabled: true,  minDays: 2,   maxDays: 3,   hourPresetId: 'working-hours' },
-  { id: 'po-approval-design', name: 'PO Approval (Design)',                enabled: true,  minDays: 1,   maxDays: 1,   hourPresetId: 'working-hours' },
-  { id: 'development',        name: 'Development (Frontend & Backend)',     enabled: true,  minDays: 1,   maxDays: 5,   hourPresetId: 'working-hours' },
-  { id: 'dev-checkin',        name: 'Developer Update Check',              enabled: true,  minDays: 1,   maxDays: 1,   hourPresetId: 'working-hours' },
-  { id: 'qa',                 name: 'QA',                                  enabled: true,  minDays: 0.5, maxDays: 1,   hourPresetId: 'working-hours' },
-  { id: 'deploy-live',        name: 'Deploy to Live',                      enabled: true,  minDays: 1,   maxDays: 1,   hourPresetId: 'personal-hours' },
-  { id: 'post-release-qa',    name: 'Post-Release QA',                     enabled: true,  minDays: 1,   maxDays: 2,   hourPresetId: 'working-hours' },
+  { id: 'req-gathering',      name: 'Requirement Gathering (with client)', enabled: true, weight: 7,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'prd-creation',       name: 'PRD Creation',                        enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'po-approval-prd',    name: 'PO Approval (PRD)',                   enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'design',             name: 'Design',                              enabled: true, weight: 3,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'po-approval-design', name: 'PO Approval (Design)',                enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'development',        name: 'Development (Frontend & Backend)',     enabled: true, weight: 10, days: 1, hourPresetId: 'working-hours'  },
+  { id: 'dev-checkin',        name: 'Developer Update Check',              enabled: true, weight: 1,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'qa',                 name: 'QA',                                  enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
+  { id: 'deploy-live',        name: 'Deploy to Live',                      enabled: true, weight: 1,  days: 1, hourPresetId: 'personal-hours' },
+  { id: 'post-release-qa',    name: 'Post-Release QA',                     enabled: true, weight: 2,  days: 1, hourPresetId: 'working-hours'  },
 ];
 
 type StagedWorkflowItem = WorkflowStage & { startDate: string; endDate: string };
 
-// Normalises stages loaded from storage/Supabase that may use the old { days } shape
-function normalizeWorkflowStages(raw: Array<Partial<WorkflowStage> & { days?: number }>): WorkflowStage[] {
-  return raw.map((s) => ({
-    id: s.id ?? crypto.randomUUID(),
-    name: s.name ?? 'Stage',
-    enabled: s.enabled ?? true,
-    minDays: s.minDays ?? (s.days ?? 1),
-    maxDays: s.maxDays ?? (s.days ?? 1),
-    hourPresetId: s.hourPresetId ?? 'working-hours',
-  }));
+// Normalise stages from storage/Supabase (handles old minDays/maxDays shape)
+function normalizeWorkflowStages(raw: Array<Partial<WorkflowStage> & { days?: number; minDays?: number; maxDays?: number }>): WorkflowStage[] {
+  return raw.map((s, idx) => {
+    const fallbackDays = s.days ?? s.minDays ?? s.maxDays ?? 1;
+    return {
+      id: s.id ?? crypto.randomUUID(),
+      name: s.name ?? `Stage ${idx + 1}`,
+      enabled: s.enabled ?? true,
+      days: fallbackDays,
+      weight: s.weight ?? fallbackDays,
+      hourPresetId: s.hourPresetId ?? 'working-hours',
+    };
+  });
 }
 
 function formatStageDays(days: number): string {
@@ -116,7 +120,28 @@ function formatStageDays(days: number): string {
   return `${days}d`;
 }
 
-// Forward scheduling: chains enabled stages from scheduleAfter
+function daysBetweenKeys(start: string, end: string): number {
+  return Math.round((fromDateKey(end).getTime() - fromDateKey(start).getTime()) / 86400000);
+}
+
+// Proportionally distribute totalDays across enabled stages by weight, min 0.5 days each.
+// Preserves manual overrides for stages where overridden=true.
+function autoDistributeStages(stages: WorkflowStage[], totalDays: number): WorkflowStage[] {
+  const enabledStages = stages.filter((s) => s.enabled);
+  if (enabledStages.length === 0 || totalDays <= 0) return stages;
+
+  const totalWeight = enabledStages.reduce((sum, s) => sum + s.weight, 0);
+  if (totalWeight === 0) return stages;
+
+  return stages.map((s) => {
+    if (!s.enabled) return s;
+    // Round to nearest 0.5, minimum 0.5
+    const proportional = Math.max(0.5, Math.round((s.weight / totalWeight) * totalDays * 2) / 2);
+    return { ...s, days: proportional };
+  });
+}
+
+// Forward scheduling: chains enabled stages from scheduleAfter using their days
 function calculateStageTimeline(stages: WorkflowStage[], scheduleAfter: string): StagedWorkflowItem[] {
   if (!scheduleAfter || stages.length === 0) {
     return stages.map((s) => ({ ...s, startDate: '', endDate: '' }));
@@ -128,7 +153,8 @@ function calculateStageTimeline(stages: WorkflowStage[], scheduleAfter: string):
       result.push({ ...stage, startDate: '', endDate: '' });
       continue;
     }
-    const endDate = addDays(cursor, Math.ceil(stage.maxDays));
+    const calendarDays = Math.max(1, Math.ceil(stage.days));
+    const endDate = addDays(cursor, calendarDays);
     result.push({ ...stage, startDate: cursor, endDate });
     cursor = endDate;
   }
@@ -378,7 +404,7 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     deadline: selectedDate,
     description: '',
     workflowEnabled: false,
-    workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
+    workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })), // days will be auto-set by effect
   };
 }
 
@@ -737,9 +763,14 @@ export default function App() {
   const capacityMinutes = 7 * capacitySource.ranges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
-  const calculatedStages = draft.workflowEnabled
-    ? calculateStageTimeline(draft.workflowStages, draft.scheduleAfter)
-    : [];
+  const calculatedStages = (() => {
+    if (!draft.workflowEnabled || !draft.scheduleAfter) return [] as StagedWorkflowItem[];
+    const totalDays = draft.deadline ? daysBetweenKeys(draft.scheduleAfter, draft.deadline) : 0;
+    const distributed = totalDays > 0
+      ? autoDistributeStages(draft.workflowStages, totalDays)
+      : draft.workflowStages;
+    return calculateStageTimeline(distributed, draft.scheduleAfter);
+  })();
 
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
@@ -876,10 +907,19 @@ export default function App() {
         setStatusMessage('Enable at least one workflow stage.');
         return;
       }
-      const stages = calculateStageTimeline(draft.workflowStages, draft.scheduleAfter);
+      if (!draft.scheduleAfter) {
+        setStatusMessage('Set a "Schedule after" date to calculate stage timelines.');
+        return;
+      }
+      // Use the same auto-distributed timeline shown in the UI
+      const totalDays = draft.deadline ? daysBetweenKeys(draft.scheduleAfter, draft.deadline) : 0;
+      const distributedStages = totalDays > 0
+        ? autoDistributeStages(draft.workflowStages, totalDays)
+        : draft.workflowStages;
+      const stages = calculateStageTimeline(distributedStages, draft.scheduleAfter);
       const firstEnabled = stages.find((s) => s.enabled);
       if (!firstEnabled?.startDate) {
-        setStatusMessage('Set a "Schedule after" date to calculate stage timelines.');
+        setStatusMessage('Could not calculate stage timelines — check Schedule after date.');
         return;
       }
 
@@ -907,7 +947,7 @@ export default function App() {
 
       const existingChildren = editingTaskId ? tasks.filter((t) => t.workflow_parent_id === editingTaskId) : [];
 
-      // Only build task items for enabled stages
+      // Only build task items for enabled stages (use the fully-calculated timeline)
       const stageTasks: TaskItem[] = stages
         .filter((s) => s.enabled)
         .map((stage) => {
@@ -920,17 +960,18 @@ export default function App() {
           const stageRanges = normalizeRanges(stagePreset.ranges);
           const stageBounds = rangeBounds(stageRanges);
           const stageDailyMinutes = stageRanges.reduce((sum, r) => sum + (r.end_minutes - r.start_minutes), 0);
-          const stageMaxDuration = Math.max(Math.round(stage.maxDays * stageDailyMinutes), DURATION_STEP);
-          const stageMinDuration = Math.max(Math.round(stage.minDays * stageDailyMinutes), DURATION_STEP);
+          // duration = stage.days × daily working minutes for that preset
+          const stageDuration = Math.max(Math.round(stage.days * stageDailyMinutes), DURATION_STEP);
+          const stageMinDuration = Math.max(Math.round(0.5 * stageDailyMinutes), DURATION_STEP);
           return {
             id: existing?.id ?? crypto.randomUUID(),
             title: `${draft.title.trim()} — ${stage.name}`,
             description: `Workflow stage of "${draft.title.trim()}"`,
             type: 'task' as TaskType,
             priority: draft.priority,
-            duration: stageMaxDuration,
-            min_duration: stageMinDuration,
-            max_duration: stageMaxDuration,
+            duration: stageDuration,
+            min_duration: Math.min(stageMinDuration, stageDuration),
+            max_duration: stageDuration,
             hour_preset: stagePreset.name,
             hours_start: stageBounds.start_minutes,
             hours_end: stageBounds.end_minutes,
@@ -1972,14 +2013,13 @@ export default function App() {
                       <p className="workflow-notice">Set a "Schedule after" date above to calculate timelines.</p>
                     ) : (
                       <div className="workflow-stages">
-                        {/* Column headers */}
+                        {/* Column headers: enable | stage | days | hours | dates */}
                         <div className="workflow-stages-header">
                           <span />
                           <span>Stage</span>
-                          <span>Min</span>
-                          <span>Max</span>
+                          <span>Days</span>
                           <span>Hours</span>
-                          <span>Dates</span>
+                          <span>Timeline</span>
                         </div>
 
                         {calculatedStages.map((stage, index) => (
@@ -2006,29 +2046,38 @@ export default function App() {
                               {stage.name}
                             </span>
 
-                            {/* Min days */}
+                            {/* Days — auto-suggested, user-adjustable in 0.5 steps */}
                             <div className="stage-days-control">
-                              <button type="button" className="stage-days-btn" disabled={!stage.enabled}
-                                onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) =>
-                                  s.id === stage.id ? { ...s, minDays: Math.max(0.5, +(s.minDays - 0.5).toFixed(1)) } : s) }))}
+                              <button
+                                type="button"
+                                className="stage-days-btn"
+                                disabled={!stage.enabled}
+                                onClick={() =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    workflowStages: prev.workflowStages.map((s) =>
+                                      s.id === stage.id
+                                        ? { ...s, days: Math.max(0.5, +(s.days - 0.5).toFixed(1)) }
+                                        : s,
+                                    ),
+                                  }))
+                                }
                               >−</button>
-                              <span className="stage-days-val">{formatStageDays(stage.minDays)}</span>
-                              <button type="button" className="stage-days-btn" disabled={!stage.enabled}
-                                onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) =>
-                                  s.id === stage.id ? { ...s, minDays: +(s.minDays + 0.5).toFixed(1) } : s) }))}
-                              >+</button>
-                            </div>
-
-                            {/* Max days */}
-                            <div className="stage-days-control">
-                              <button type="button" className="stage-days-btn" disabled={!stage.enabled}
-                                onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) =>
-                                  s.id === stage.id ? { ...s, maxDays: Math.max(s.minDays, +(s.maxDays - 0.5).toFixed(1)) } : s) }))}
-                              >−</button>
-                              <span className="stage-days-val">{formatStageDays(stage.maxDays)}</span>
-                              <button type="button" className="stage-days-btn" disabled={!stage.enabled}
-                                onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) =>
-                                  s.id === stage.id ? { ...s, maxDays: +(s.maxDays + 0.5).toFixed(1) } : s) }))}
+                              <span className="stage-days-val">{formatStageDays(stage.days)}</span>
+                              <button
+                                type="button"
+                                className="stage-days-btn"
+                                disabled={!stage.enabled}
+                                onClick={() =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    workflowStages: prev.workflowStages.map((s) =>
+                                      s.id === stage.id
+                                        ? { ...s, days: +(s.days + 0.5).toFixed(1) }
+                                        : s,
+                                    ),
+                                  }))
+                                }
                               >+</button>
                             </div>
 
@@ -2051,7 +2100,7 @@ export default function App() {
                               ))}
                             </select>
 
-                            {/* Calculated dates */}
+                            {/* Auto-calculated dates */}
                             <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>
                               {stage.enabled && stage.startDate
                                 ? `${formatDate(stage.startDate, { month: 'short', day: 'numeric' })} → ${formatDate(stage.endDate, { month: 'short', day: 'numeric' })}`
@@ -2062,17 +2111,21 @@ export default function App() {
 
                         {/* Summary footer */}
                         {(() => {
-                          const enabled = calculatedStages.filter((s) => s.enabled);
-                          const last = enabled[enabled.length - 1];
-                          const totalMin = draft.workflowStages.filter((s) => s.enabled).reduce((sum, s) => sum + s.minDays, 0);
-                          const totalMax = draft.workflowStages.filter((s) => s.enabled).reduce((sum, s) => sum + s.maxDays, 0);
-                          const overDeadline = draft.deadline && last?.endDate && last.endDate > draft.deadline;
+                          const enabledCalc = calculatedStages.filter((s) => s.enabled);
+                          const last = enabledCalc[enabledCalc.length - 1];
+                          const totalDays = enabledCalc.reduce((sum, s) => sum + s.days, 0);
+                          const overDeadline = Boolean(draft.deadline && last?.endDate && last.endDate > draft.deadline);
                           return (
                             <div className={`workflow-total ${overDeadline ? 'over-deadline' : ''}`}>
-                              <span>{enabled.length} stages · {formatStageDays(totalMin)}–{formatStageDays(totalMax)} total</span>
+                              <span>
+                                {enabledCalc.length} stages · {formatStageDays(totalDays)} total
+                                {draft.deadline
+                                  ? ` of ${formatStageDays(daysBetweenKeys(draft.scheduleAfter, draft.deadline))} available`
+                                  : ''}
+                              </span>
                               {last?.endDate ? (
                                 <span>
-                                  Est. completion: {formatDate(last.endDate, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                  Est. done: {formatDate(last.endDate, { month: 'short', day: 'numeric', year: 'numeric' })}
                                   {overDeadline ? ' ⚠ past due date' : ''}
                                 </span>
                               ) : null}
