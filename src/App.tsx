@@ -544,6 +544,7 @@ export default function App() {
   const emojiPickerHostRef = useRef<HTMLDivElement | null>(null);
   const emojiTriggerRef = useRef<HTMLButtonElement | null>(null);
   const emojiPopoverRef = useRef<HTMLDivElement | null>(null);
+  const boardBodyRef = useRef<HTMLDivElement | null>(null);
 
   // Current time in minutes since midnight, updated every 30s for the now-line
   const getNowMinutes = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
@@ -553,6 +554,16 @@ export default function App() {
     const id = setInterval(() => setNowMinutes(getNowMinutes()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Scroll the board to the now-line whenever the planner view is active
+  useEffect(() => {
+    if (view !== 'planner') return;
+    const el = boardBodyRef.current;
+    if (!el) return;
+    const nowTop = BOARD_TOP_PADDING + nowMinutes * PIXELS_PER_MINUTE;
+    const offset = Math.max(0, nowTop - el.clientHeight / 3);
+    el.scrollTo({ top: offset, behavior: 'smooth' });
+  }, [view]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1749,6 +1760,7 @@ export default function App() {
                   </div>
 
                   <div
+                    ref={boardBodyRef}
                     className="week-board__body"
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => void handleBoardDrop(event)}
