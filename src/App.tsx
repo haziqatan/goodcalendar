@@ -543,6 +543,7 @@ export default function App() {
   const [draggingPriorityTaskId, setDraggingPriorityTaskId] = useState<string | null>(null);
   const [hoveredPriorityBucket, setHoveredPriorityBucket] = useState<PriorityBucket | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
   const [showBufferSettings, setShowBufferSettings] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -901,6 +902,44 @@ export default function App() {
   const capacityMinutes = 7 * capacitySource.ranges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
+  // Real-time scheduling preview hint shown in the create/edit modal
+  const draftSchedulingHint = useMemo(() => {
+    if (!showTaskModal || draft.workflowEnabled) return null;
+    const resolvedDt = draft.scheduleAfterMode === 'now'
+      ? (() => { const n = new Date(); n.setMinutes(Math.floor(n.getMinutes() / 5) * 5, 0, 0); return toDtKey(n); })()
+      : (draft.scheduleAfter || selectedDate);
+    const scheduleAfterKey = datetimeToDateKey(resolvedDt);
+    const scheduleAfterMins = datetimeToStartMinutes(resolvedDt);
+    const deadlineKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
+    const preset = hourPresets.find((e) => e.id === draft.hourPresetId) ?? selectedPreset;
+    const presetRanges = normalizeRanges(preset.ranges);
+    const presetBounds = rangeBounds(presetRanges);
+    if (presetRanges.length === 0) return null;
+    const duration = clampDuration(draft.duration);
+    const placementContext = {
+      type: draft.type,
+      duration,
+      deadline: deadlineKey || undefined,
+      schedule_after: scheduleAfterKey,
+      hours_ranges: presetRanges,
+      hours_start: presetBounds.start_minutes,
+      hours_end: presetBounds.end_minutes,
+    };
+    const preferredStart = Math.max(scheduleAfterMins, presetBounds.start_minutes);
+    const placement = findPlacement(tasks, placementContext, scheduleAfterKey, preferredStart, bufferSettings, editingTaskId ?? undefined);
+    if (!placement) return { text: 'No open slot found — try adjusting hours or deadline.', warn: true };
+    const tomorrowKey = addDays(todayKey, 1);
+    const dateLabel = placement.scheduled_date === todayKey
+      ? 'today'
+      : placement.scheduled_date === tomorrowKey
+        ? 'tomorrow'
+        : formatDate(placement.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' });
+    const timeLabel = formatDisplayTime(placement.start_minutes);
+    const pastDeadline = Boolean(deadlineKey && placement.scheduled_date > deadlineKey);
+    if (pastDeadline) return { text: `Earliest slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
+    return { text: `Will be scheduled ${dateLabel} at ${timeLabel}`, warn: false };
+  }, [showTaskModal, draft.scheduleAfterMode, draft.scheduleAfter, draft.duration, draft.hourPresetId, draft.type, draft.deadline, draft.workflowEnabled, tasks, bufferSettings, editingTaskId, selectedDate, todayKey, hourPresets, selectedPreset]);
+
   const calculatedStages = (() => {
     if (!draft.workflowEnabled) return [] as StagedWorkflowItem[];
     const previewStartDt = draft.scheduleAfterMode === 'now' ? toDtKey(new Date()) : draft.scheduleAfter;
@@ -920,6 +959,7 @@ export default function App() {
   const openTaskModal = () => {
     setEditingTaskId(null);
     setDraft(buildDraft(selectedDate, hourPresets[0]?.id ?? DEFAULT_HOUR_PRESETS[0].id));
+    setShowMoreOptions(false);
     setShowTaskModal(true);
   };
 
@@ -934,6 +974,7 @@ export default function App() {
       deadline: '',
       duration: Math.max(durationMinutes, DURATION_STEP),
     });
+    setShowMoreOptions(false);
     setShowTaskModal(true);
   };
 
@@ -1081,6 +1122,7 @@ export default function App() {
     focusDate(task.scheduled_date);
     setEditingTaskId(task.id);
     setDraft(buildDraftFromTask(task, presetId));
+    setShowMoreOptions(true);
     setShowTaskModal(true);
   };
 
@@ -2391,8 +2433,9 @@ export default function App() {
             <form className="task-modal__form" onSubmit={submitTask}>
               <div className="task-modal__title">
                 <strong>{editingTaskId ? 'Edit task' : 'New task'}</strong>
-                <span>{editingTaskId ? 'Update scheduling details and save changes.' : 'Create a task with scheduling rules and notes.'}</span>
               </div>
+
+              {/* ── Title ── */}
               <div className="task-title-field">
                 <button
                   ref={emojiTriggerRef}
@@ -2417,6 +2460,7 @@ export default function App() {
               </div>
               {!draft.title.trim() ? <p className="modal-error">Task title is required</p> : null}
 
+              {/* ── Priority ── */}
               <div className="priority-row">
                 {(['critical', 'high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
                   <button
@@ -2425,106 +2469,37 @@ export default function App() {
                     className={`priority-pill ${draft.priority === priority ? 'active' : ''} ${priority}`}
                     onClick={() => setDraft((prev) => ({ ...prev, priority }))}
                   >
-                    {priority} priority
+                    {priority[0].toUpperCase() + priority.slice(1)}
                   </button>
                 ))}
               </div>
 
+              {/* ── Duration ── */}
               {!draft.workflowEnabled ? (
-                <>
-                  <div className="modal-card modal-card--duration">
-                    <div>
-                      <span>Duration</span>
-                      <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} mins`}</strong>
-                    </div>
-                    <div className="duration-controls">
-                      <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration - DURATION_STEP) }))}>
-                        <MinusCircle size={20} />
-                      </button>
-                      <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration + DURATION_STEP) }))}>
-                        <PlusCircle size={20} />
-                      </button>
-                    </div>
+                <div className="modal-card modal-card--duration">
+                  <div>
+                    <span>Duration</span>
+                    <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} min`}</strong>
                   </div>
-
-                  <label className="toggle-row">
-                    <input
-                      type="checkbox"
-                      checked={draft.flexible}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))}
-                    />
-                    <span>Flexible split duration</span>
-                  </label>
-
-                  <div className="modal-grid">
-                    <label className="modal-card">
-                      <span>Min duration</span>
-                      <input
-                        type="number"
-                        min={15}
-                        step={15}
-                        value={draft.minDuration}
-                        onChange={(event) => setDraft((prev) => ({ ...prev, minDuration: clampDuration(Number(event.target.value)) }))}
-                        disabled={!draft.flexible}
-                      />
-                    </label>
-                    <label className="modal-card">
-                      <span>Max duration</span>
-                      <input
-                        type="number"
-                        min={15}
-                        step={15}
-                        value={draft.maxDuration}
-                        onChange={(event) => setDraft((prev) => ({ ...prev, maxDuration: clampDuration(Number(event.target.value)) }))}
-                        disabled={!draft.flexible}
-                      />
-                    </label>
+                  <div className="duration-controls">
+                    <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration - DURATION_STEP) }))}>
+                      <MinusCircle size={20} />
+                    </button>
+                    <button type="button" className="icon-btn" onClick={() => setDraft((prev) => ({ ...prev, duration: clampDuration(prev.duration + DURATION_STEP) }))}>
+                      <PlusCircle size={20} />
+                    </button>
                   </div>
-                </>
+                </div>
               ) : null}
 
-              <div className="modal-card hours-card">
-                <div className="hours-card__label">
-                  <span>Hours</span>
-                  <small>{presetSummary(selectedPreset)}</small>
-                </div>
-                <div className="hours-card__actions">
-                  <select
-                    value={draft.hourPresetId}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, hourPresetId: event.target.value }))}
-                  >
-                    {hourPresets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="ghost-btn" onClick={() => setShowHoursSettings(true)}>
-                    <Settings2 size={16} />
-                    Edit
-                  </button>
-                </div>
-              </div>
-
-              <div className="modal-grid">
-                <div className="modal-card">
-                  <span>Schedule after</span>
+              {/* ── Schedule after + Due date ── */}
+              <div className="modal-timing-row">
+                <div className="modal-field">
+                  <label className="modal-field__label">Earliest start</label>
                   <div className="schedule-after-row">
                     <div className="seg-control">
-                      <button
-                        type="button"
-                        className={draft.scheduleAfterMode === 'now' ? 'active' : ''}
-                        onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'now' }))}
-                      >
-                        Now
-                      </button>
-                      <button
-                        type="button"
-                        className={draft.scheduleAfterMode === 'custom' ? 'active' : ''}
-                        onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'custom' }))}
-                      >
-                        Custom
-                      </button>
+                      <button type="button" className={draft.scheduleAfterMode === 'now' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'now' }))}>Now</button>
+                      <button type="button" className={draft.scheduleAfterMode === 'custom' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, scheduleAfterMode: 'custom' }))}>Custom</button>
                     </div>
                     {draft.scheduleAfterMode === 'custom' ? (
                       <input
@@ -2532,13 +2507,11 @@ export default function App() {
                         value={draft.scheduleAfter}
                         onChange={(event) => setDraft((prev) => ({ ...prev, scheduleAfter: event.target.value }))}
                       />
-                    ) : (
-                      <span className="now-label">Schedules as soon as possible</span>
-                    )}
+                    ) : null}
                   </div>
                 </div>
-                <div className="modal-card">
-                  <span>Due date &amp; time <em className="optional-label">(optional)</em></span>
+                <div className="modal-field">
+                  <label className="modal-field__label">Due date <span className="optional-label">(optional)</span></label>
                   <div className="deadline-row">
                     <input
                       type="datetime-local"
@@ -2546,207 +2519,165 @@ export default function App() {
                       onChange={(event) => setDraft((prev) => ({ ...prev, deadline: event.target.value }))}
                     />
                     {draft.deadline ? (
-                      <button
-                        type="button"
-                        className="clear-btn"
-                        onClick={() => setDraft((prev) => ({ ...prev, deadline: '' }))}
-                        aria-label="Clear due date"
-                      >
-                        ✕
+                      <button type="button" className="clear-btn" onClick={() => setDraft((prev) => ({ ...prev, deadline: '' }))} aria-label="Clear due date">
+                        <X size={14} />
                       </button>
                     ) : null}
                   </div>
                 </div>
               </div>
 
-              {/* ── Workflow section ── */}
-              <div className="workflow-section">
-                <label className="workflow-toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={draft.workflowEnabled}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, workflowEnabled: event.target.checked }))}
-                  />
-                  <div className="workflow-toggle-label">
-                    <strong>Workflow stages</strong>
-                    <span>Schedule a product development pipeline forward from "Schedule after"</span>
-                  </div>
-                </label>
+              {/* ── Scheduling hint ── */}
+              {draftSchedulingHint ? (
+                <p className={`scheduling-hint${draftSchedulingHint.warn ? ' scheduling-hint--warn' : ''}`}>
+                  {draftSchedulingHint.warn ? '⚠ ' : '✓ '}{draftSchedulingHint.text}
+                </p>
+              ) : null}
 
-                {draft.workflowEnabled ? (
-                  <>
-                    {draft.scheduleAfterMode === 'custom' && !draft.scheduleAfter ? (
-                      <p className="workflow-notice">Set a "Schedule after" date above to calculate timelines.</p>
-                    ) : (
-                      <div className="workflow-stages">
-                        {/* Column headers: enable | stage | days | hours | dates */}
-                        <div className="workflow-stages-header">
-                          <span />
-                          <span>Stage</span>
-                          <span>Days</span>
-                          <span>Hours</span>
-                          <span>Timeline</span>
-                        </div>
+              {/* ── More options accordion ── */}
+              <button
+                type="button"
+                className={`more-options-toggle${showMoreOptions ? ' open' : ''}`}
+                onClick={() => setShowMoreOptions((v) => !v)}
+              >
+                <ChevronDown size={15} />
+                {showMoreOptions ? 'Fewer options' : 'More options'}
+              </button>
 
-                        {calculatedStages.map((stage, index) => (
-                          <div key={stage.id} className={`workflow-stage-row ${stage.enabled ? '' : 'disabled'}`}>
-                            {/* Enable toggle */}
-                            <label className="stage-enable">
-                              <input
-                                type="checkbox"
-                                checked={stage.enabled}
-                                onChange={(event) =>
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    workflowStages: prev.workflowStages.map((s) =>
-                                      s.id === stage.id ? { ...s, enabled: event.target.checked } : s,
-                                    ),
-                                  }))
-                                }
-                              />
-                            </label>
-
-                            {/* Name */}
-                            <span className="stage-name">
-                              <span className="stage-num">{index + 1}</span>
-                              {stage.name}
-                            </span>
-
-                            {/* Duration — auto-suggested, user-adjustable ±15 min */}
-                            <div className="stage-days-control">
-                              <button
-                                type="button"
-                                className="stage-days-btn"
-                                disabled={!stage.enabled}
-                                onClick={() =>
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    workflowStages: prev.workflowStages.map((s) =>
-                                      s.id === stage.id
-                                        ? { ...s, minutes: Math.max(15, s.minutes - 15) }
-                                        : s,
-                                    ),
-                                  }))
-                                }
-                              >−</button>
-                              <span className="stage-days-val">{formatDuration(stage.minutes)}</span>
-                              <button
-                                type="button"
-                                className="stage-days-btn"
-                                disabled={!stage.enabled}
-                                onClick={() =>
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    workflowStages: prev.workflowStages.map((s) =>
-                                      s.id === stage.id
-                                        ? { ...s, minutes: s.minutes + 15 }
-                                        : s,
-                                    ),
-                                  }))
-                                }
-                              >+</button>
-                            </div>
-
-                            {/* Hour preset */}
-                            <select
-                              className="stage-hours-select"
-                              value={stage.hourPresetId}
-                              disabled={!stage.enabled}
-                              onChange={(event) =>
-                                setDraft((prev) => ({
-                                  ...prev,
-                                  workflowStages: prev.workflowStages.map((s) =>
-                                    s.id === stage.id ? { ...s, hourPresetId: event.target.value } : s,
-                                  ),
-                                }))
-                              }
-                            >
-                              {hourPresets.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-
-                            {/* Auto-calculated dates */}
-                            <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>
-                              {stage.enabled && stage.startDt
-                                ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}`
-                                : '—'}
-                            </span>
-                          </div>
+              {showMoreOptions ? (
+                <div className="more-options-body">
+                  {/* Hours */}
+                  <div className="modal-card hours-card">
+                    <div className="hours-card__label">
+                      <span>Hours</span>
+                      <small>{presetSummary(selectedPreset)}</small>
+                    </div>
+                    <div className="hours-card__actions">
+                      <select value={draft.hourPresetId} onChange={(event) => setDraft((prev) => ({ ...prev, hourPresetId: event.target.value }))}>
+                        {hourPresets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.name}</option>
                         ))}
-
-                        {/* Summary footer */}
-                        {(() => {
-                          const enabledCalc = calculatedStages.filter((s) => s.enabled);
-                          const last = enabledCalc[enabledCalc.length - 1];
-                          const totalMinutes = enabledCalc.reduce((sum, s) => sum + s.minutes, 0);
-                          const overDeadline = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
-                          return (
-                            <div className={`workflow-total ${overDeadline ? 'over-deadline' : ''}`}>
-                              <span>
-                                {enabledCalc.length} stages · {formatDuration(totalMinutes)} total
-                                {draft.deadline && draft.scheduleAfter
-                                  ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available`
-                                  : ''}
-                              </span>
-                              {last?.endDt ? (
-                                <span>
-                                  Est. done: {formatDt(last.endDt)}
-                                  {overDeadline ? ' ⚠ past due date' : ''}
-                                </span>
-                              ) : null}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </>
-                ) : null}
-              </div>
-
-              {!draft.workflowEnabled ? (
-                <div className="modal-grid">
-                  <label className="modal-card">
-                    <span>Type</span>
-                    <select
-                      value={draft.type}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}
-                    >
-                      <option value="task">Task</option>
-                      <option value="focus">Focus</option>
-                      <option value="buffer">Buffer</option>
-                    </select>
-                  </label>
-                  <div className="modal-card helper-card">
-                    <span>Will schedule inside</span>
-                    <strong>{selectedPreset.name}</strong>
-                    <small>{presetSummary(selectedPreset)}</small>
+                      </select>
+                      <button type="button" className="ghost-btn" onClick={() => setShowHoursSettings(true)}>
+                        <Settings2 size={16} /> Edit
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Flexible split */}
+                  {!draft.workflowEnabled ? (
+                    <>
+                      <label className="toggle-row">
+                        <input type="checkbox" checked={draft.flexible} onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))} />
+                        <span>Flexible split duration</span>
+                      </label>
+                      {draft.flexible ? (
+                        <div className="modal-grid">
+                          <label className="modal-card">
+                            <span>Min duration (min)</span>
+                            <input
+                              type="number" min={15} step={15}
+                              value={draft.minDuration}
+                              onChange={(event) => {
+                                const v = clampDuration(Number(event.target.value));
+                                setDraft((prev) => ({ ...prev, minDuration: v, maxDuration: Math.max(prev.maxDuration, v) }));
+                              }}
+                            />
+                          </label>
+                          <label className="modal-card">
+                            <span>Max duration (min)</span>
+                            <input
+                              type="number" min={15} step={15}
+                              value={draft.maxDuration}
+                              onChange={(event) => {
+                                const v = clampDuration(Number(event.target.value));
+                                setDraft((prev) => ({ ...prev, maxDuration: v, minDuration: Math.min(prev.minDuration, v) }));
+                              }}
+                            />
+                          </label>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {/* Task type */}
+                  {!draft.workflowEnabled ? (
+                    <label className="modal-card">
+                      <span>Type</span>
+                      <select value={draft.type} onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}>
+                        <option value="task">Task</option>
+                        <option value="focus">Focus</option>
+                        <option value="buffer">Buffer</option>
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {/* Workflow */}
+                  <div className="workflow-section">
+                    <label className="workflow-toggle-row">
+                      <input type="checkbox" checked={draft.workflowEnabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowEnabled: event.target.checked }))} />
+                      <div className="workflow-toggle-label">
+                        <strong>Workflow stages</strong>
+                        <span>Schedule a product pipeline forward from earliest start</span>
+                      </div>
+                    </label>
+
+                    {draft.workflowEnabled ? (
+                      draft.scheduleAfterMode === 'custom' && !draft.scheduleAfter ? (
+                        <p className="workflow-notice">Set an earliest start date above to calculate timelines.</p>
+                      ) : (
+                        <div className="workflow-stages">
+                          <div className="workflow-stages-header">
+                            <span /><span>Stage</span><span>Duration</span><span>Hours</span><span>Timeline</span>
+                          </div>
+                          {calculatedStages.map((stage, index) => (
+                            <div key={stage.id} className={`workflow-stage-row ${stage.enabled ? '' : 'disabled'}`}>
+                              <label className="stage-enable">
+                                <input type="checkbox" checked={stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, enabled: event.target.checked } : s) }))} />
+                              </label>
+                              <span className="stage-name"><span className="stage-num">{index + 1}</span>{stage.name}</span>
+                              <div className="stage-days-control">
+                                <button type="button" className="stage-days-btn" disabled={!stage.enabled} onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: Math.max(15, s.minutes - 15) } : s) }))}>−</button>
+                                <span className="stage-days-val">{formatDuration(stage.minutes)}</span>
+                                <button type="button" className="stage-days-btn" disabled={!stage.enabled} onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: s.minutes + 15 } : s) }))}>+</button>
+                              </div>
+                              <select className="stage-hours-select" value={stage.hourPresetId} disabled={!stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, hourPresetId: event.target.value } : s) }))}>
+                                {hourPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              </select>
+                              <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>{stage.enabled && stage.startDt ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}` : '—'}</span>
+                            </div>
+                          ))}
+                          {(() => {
+                            const enabled = calculatedStages.filter((s) => s.enabled);
+                            const last = enabled[enabled.length - 1];
+                            const total = enabled.reduce((sum, s) => sum + s.minutes, 0);
+                            const over = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
+                            return (
+                              <div className={`workflow-total ${over ? 'over-deadline' : ''}`}>
+                                <span>{enabled.length} stages · {formatDuration(total)} total{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
+                                {last?.endDt ? <span>Est. done: {formatDt(last.endDt)}{over ? ' ⚠ past due' : ''}</span> : null}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )
+                    ) : null}
+                  </div>
+
+                  {/* Notes */}
+                  <label className="modal-card notes-card">
+                    <span>Notes</span>
+                    <textarea value={draft.description} onChange={(event) => setDraft((prev) => ({ ...prev, description: event.target.value }))} placeholder="Add notes..." rows={3} />
+                  </label>
                 </div>
               ) : null}
 
-              <label className="modal-card notes-card">
-                <span>Notes</span>
-                <textarea
-                  value={draft.description}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, description: event.target.value }))}
-                  placeholder="Add notes..."
-                  rows={4}
-                />
-              </label>
-
               <div className="modal-actions">
                 {editingTaskId ? (
-                  <button type="button" className="ghost-btn danger-btn" onClick={() => void deleteTask()}>
-                    Delete
-                  </button>
+                  <button type="button" className="ghost-btn danger-btn" onClick={() => void deleteTask()}>Delete</button>
                 ) : null}
-                <button type="button" className="ghost-btn" onClick={closeTaskModal}>
-                  Cancel
-                </button>
-                <button type="submit" className="primary-btn">
-                  {editingTaskId ? 'Save changes' : 'Create'}
-                </button>
+                <button type="button" className="ghost-btn" onClick={closeTaskModal}>Cancel</button>
+                <button type="submit" className="primary-btn">{editingTaskId ? 'Save changes' : 'Create'}</button>
               </div>
             </form>
           </section>

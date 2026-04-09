@@ -1630,54 +1630,11 @@ button {
   border-color: var(--primary);
 }
 
-.schedule-after-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.deadline-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.deadline-row input {
-  flex: 1;
-}
-
-.clear-btn {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: none;
-  background: var(--line);
-  color: var(--muted);
-  font-size: 0.7rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 120ms ease;
-}
-
-.clear-btn:hover {
-  background: var(--line-soft);
-  color: var(--text);
-}
-
 .optional-label {
   font-weight: 400;
   font-style: normal;
   color: var(--muted);
   font-size: 0.75rem;
-}
-
-.now-label {
-  font-size: 0.85rem;
-  color: var(--muted);
-  padding: 4px 0;
 }
 
 /* Segmented control */
@@ -1764,6 +1721,144 @@ button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+/* Timing row — Earliest start + Due date side-by-side */
+.modal-timing-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-field__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.01em;
+}
+
+.modal-field__label .optional-label {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.schedule-after-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.deadline-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deadline-row input[type="datetime-local"] {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.84rem;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+
+.deadline-row input[type="datetime-local"]:focus {
+  border-color: var(--primary);
+}
+
+.schedule-after-row input[type="datetime-local"] {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.84rem;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+
+.schedule-after-row input[type="datetime-local"]:focus {
+  border-color: var(--primary);
+}
+
+.clear-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.clear-btn:hover {
+  background: var(--red-soft);
+  color: var(--red);
+  border-color: transparent;
+}
+
+/* Scheduling hint */
+.scheduling-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  background: rgba(14, 167, 106, 0.08);
+  color: #0a6b44;
+  border: 1px solid rgba(14, 167, 106, 0.2);
+}
+
+.scheduling-hint--warn {
+  background: rgba(232, 162, 23, 0.09);
+  color: #8a5a00;
+  border-color: rgba(232, 162, 23, 0.28);
+}
+
+/* More options accordion */
+.more-options-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.more-options-toggle svg {
+  transition: transform 200ms ease;
+}
+
+.more-options-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.more-options-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 /* Hours card */
@@ -2231,6 +2326,7 @@ button {
   }
 
   .modal-grid,
+  .modal-timing-row,
   .buffer-settings-grid,
   .preset-range-row {
     grid-template-columns: 1fr;
