@@ -18,7 +18,7 @@ export interface WorkflowStage {
   id: string;
   name: string;
   enabled: boolean;
-  days: number;        // auto-suggested (proportional), user-editable; 0.5 = 4 h
+  minutes: number;     // auto-suggested (proportional), user-editable; in minutes
   weight: number;      // relative weight for proportional auto-distribution
   hourPresetId: string;
 }
