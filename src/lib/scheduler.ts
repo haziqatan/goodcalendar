@@ -361,6 +361,8 @@ function findDiscretePlacement(
   endDate: string,
   bufferSettings: BufferSettings,
   includeFlexibleBuffer: boolean,
+  nowDateKey = '',
+  nowMinutes = 0,
 ) {
   const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
   const preferred = task.scheduled_date;
@@ -377,17 +379,19 @@ function findDiscretePlacement(
   for (const dateKey of candidateDates) {
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
+    const nowFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
 
     for (const window of windows) {
       const gaps = findBufferedGaps(dateBlocks, task.type, window.start_minutes, window.end_minutes, bufferSettings, includeFlexibleBuffer);
       const fittingSlots = gaps
-        .filter((gap) => gap.end - gap.start >= task.duration)
+        .filter((gap) => gap.end > Math.max(gap.start, nowFloor) && gap.end - Math.max(gap.start, nowFloor) >= task.duration)
         .map((gap) => {
+          const effectiveGapStart = Math.max(gap.start, nowFloor);
           const desired = clampStart(
             dateKey === preferred ? preferredMinute : Math.max(window.start_minutes, task.start_minutes),
             task.duration,
           );
-          const start = Math.min(Math.max(gap.start, desired), gap.end - task.duration);
+          const start = Math.min(Math.max(effectiveGapStart, desired), gap.end - task.duration);
           return {
             start,
             score: Math.abs(start - desired),
@@ -438,6 +442,8 @@ function allocateSplitBlocks(
   bufferSettings: BufferSettings,
   allowPartial: boolean,
   includeFlexibleBuffer: boolean,
+  nowDateKey = '',
+  nowMinutes = 0,
 ) {
   const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
   const { minDuration, maxDuration } = normalizeChunkBounds(task);
@@ -446,14 +452,14 @@ function allocateSplitBlocks(
   let segmentIndex = 0;
   const createdBlocks: ScheduleBlock[] = [];
 
-  // On the earliest date, respect start_minutes as a time-of-day floor (e.g. "now")
-  const timeFloor = task.start_minutes;
-
   for (let dateKey = earliest; dateKey <= candidateEnd && remaining > 0; dateKey = addDays(dateKey, 1)) {
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
-    // Only enforce the time floor on the earliest date
-    const dayTimeFloor = dateKey === earliest ? timeFloor : 0;
+    // Never schedule before current time on today's date.
+    // Also respect schedule_after time floor on the task's earliest date.
+    const nowFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
+    const taskFloor = dateKey === earliest ? task.start_minutes : 0;
+    const dayTimeFloor = Math.max(nowFloor, taskFloor);
 
     for (const window of windows) {
       if (remaining <= 0) {
@@ -563,6 +569,8 @@ export function buildScheduleBlocks(
   startDate: string,
   endDate: string,
   bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
+  nowDateKey = '',
+  nowMinutes = 0,
 ): ScheduleBlock[] {
   const blocksByDate = new Map<string, ScheduleBlock[]>();
   const lockedTasks = sortTasksChronologically(tasks.filter((task) => task.done));
@@ -579,8 +587,8 @@ export function buildScheduleBlocks(
 
   habitTasks.forEach((task) => {
     const placement =
-      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, true) ??
-      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, false);
+      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, true, nowDateKey, nowMinutes) ??
+      findDiscretePlacement(task, blocksByDate, startDate, endDate, bufferSettings, false, nowDateKey, nowMinutes);
     if (!placement) {
       return;
     }
@@ -594,10 +602,10 @@ export function buildScheduleBlocks(
   });
 
   taskItems.forEach((task) => {
-    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, true);
+    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, true, nowDateKey, nowMinutes);
     const blocks = firstPassBlocks.length > 0
       ? firstPassBlocks
-      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, false);
+      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, false, false, nowDateKey, nowMinutes);
     if (blocks.length > 0) {
       optimizedBlocks.push(...blocks);
       return;
@@ -618,10 +626,10 @@ export function buildScheduleBlocks(
   });
 
   focusItems.forEach((task) => {
-    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, true);
+    const firstPassBlocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, true, nowDateKey, nowMinutes);
     const blocks = firstPassBlocks.length > 0
       ? firstPassBlocks
-      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, false);
+      : allocateSplitBlocks(task, blocksByDate, startDate, endDate, bufferSettings, true, false, nowDateKey, nowMinutes);
     optimizedBlocks.push(...blocks);
   });
 

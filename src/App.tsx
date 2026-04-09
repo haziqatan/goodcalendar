@@ -708,8 +708,8 @@ export default function App() {
   }, [tasks, weekDates]);
 
   const optimizedBlocks = useMemo<ScheduleBlock[]>(
-    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings),
-    [tasks, planningStart, planningEnd, bufferSettings],
+    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings, todayKey, nowMinutes),
+    [tasks, planningStart, planningEnd, bufferSettings, todayKey, nowMinutes],
   );
 
   const blocksByTaskId = useMemo(() => {
@@ -1208,7 +1208,7 @@ export default function App() {
       const previewStart = previewStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
       const previewEndSeed = item.deadline ?? item.scheduled_date;
       const previewEnd = addDays(previewEndSeed > planningEnd ? previewEndSeed : planningEnd, 14);
-      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd, bufferSettings).filter((block) => block.task_id === item.id);
+      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd, bufferSettings, todayKey, nowMinutes).filter((block) => block.task_id === item.id);
 
       if (previewBlocks.length === 0) {
         setStatusMessage('No conflict-free schedule was found for the selected hours and deadline window.');
