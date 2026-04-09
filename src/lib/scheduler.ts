@@ -210,6 +210,226 @@ function compareTaskImportance(left: TaskItem, right: TaskItem) {
   return left.title.localeCompare(right.title);
 }
 
+function preferredDate(task: TaskItem) {
+  return task.schedule_after ?? task.scheduled_date;
+}
+
+function preferredStart(task: TaskItem) {
+  const windows = getTaskWindows(task);
+  return Math.min(
+    Math.max(task.start_minutes, windows[0]?.start_minutes ?? AUTO_START_MINUTES),
+    (windows[windows.length - 1]?.end_minutes ?? AUTO_END_MINUTES) - SNAP_MINUTES,
+  );
+}
+
+function buildDateSpan(startDate: string, endDate: string) {
+  const dates: string[] = [];
+  for (let dateKey = startDate; dateKey <= endDate; dateKey = addDays(dateKey, 1)) {
+    dates.push(dateKey);
+  }
+  return dates;
+}
+
+function compareHabitPreference(left: TaskItem, right: TaskItem) {
+  const importanceDifference = compareTaskImportance(left, right);
+  if (importanceDifference !== 0) {
+    return importanceDifference;
+  }
+
+  const leftDate = preferredDate(left);
+  const rightDate = preferredDate(right);
+  if (leftDate !== rightDate) {
+    return leftDate.localeCompare(rightDate);
+  }
+
+  return preferredStart(left) - preferredStart(right);
+}
+
+function compareFocusFlexibility(left: TaskItem, right: TaskItem) {
+  const importanceDifference = compareTaskImportance(left, right);
+  if (importanceDifference !== 0) {
+    return importanceDifference;
+  }
+
+  const leftDuration = left.duration;
+  const rightDuration = right.duration;
+  if (leftDuration !== rightDuration) {
+    return leftDuration - rightDuration;
+  }
+
+  return preferredStart(left) - preferredStart(right);
+}
+
+function getTaskHorizon(task: TaskItem, startDate: string, endDate: string) {
+  const earliest = preferredDate(task) > startDate ? preferredDate(task) : startDate;
+  const naturalLatest = task.deadline ?? addDays(task.scheduled_date, task.type === 'buffer' ? 2 : 7);
+  const latest = naturalLatest > endDate ? endDate : naturalLatest;
+  return {
+    earliest,
+    latest: latest >= earliest ? latest : earliest,
+  };
+}
+
+function getBlockMapForDate(blocksByDate: Map<string, ScheduleBlock[]>, dateKey: string) {
+  return blocksByDate.get(dateKey) ?? [];
+}
+
+function pushBlock(blocksByDate: Map<string, ScheduleBlock[]>, block: ScheduleBlock) {
+  const current = blocksByDate.get(block.scheduled_date) ?? [];
+  current.push(block);
+  current.sort((left, right) => left.start_minutes - right.start_minutes);
+  blocksByDate.set(block.scheduled_date, current);
+}
+
+function findDiscretePlacement(
+  task: TaskItem,
+  blocksByDate: Map<string, ScheduleBlock[]>,
+  startDate: string,
+  endDate: string,
+) {
+  const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
+  const preferred = task.scheduled_date;
+  const preferredMinute = preferredStart(task);
+  const candidateDates = buildDateSpan(earliest, latest).sort((left, right) => {
+    const leftDistance = Math.abs(fromDateKey(left).getTime() - fromDateKey(preferred).getTime());
+    const rightDistance = Math.abs(fromDateKey(right).getTime() - fromDateKey(preferred).getTime());
+    if (leftDistance !== rightDistance) {
+      return leftDistance - rightDistance;
+    }
+    return left.localeCompare(right);
+  });
+
+  for (const dateKey of candidateDates) {
+    const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
+    const windows = getTaskWindows(task);
+
+    for (const window of windows) {
+      const gaps = findFreeGaps(dateBlocks, window.start_minutes, window.end_minutes);
+      const fittingSlots = gaps
+        .filter((gap) => gap.end - gap.start >= task.duration)
+        .map((gap) => {
+          const desired = clampStart(
+            dateKey === preferred ? preferredMinute : Math.max(window.start_minutes, task.start_minutes),
+            task.duration,
+          );
+          const start = Math.min(Math.max(gap.start, desired), gap.end - task.duration);
+          return {
+            start,
+            score: Math.abs(start - desired),
+          };
+        })
+        .sort((left, right) => left.score - right.score || left.start - right.start);
+
+      if (fittingSlots.length > 0) {
+        return {
+          scheduled_date: dateKey,
+          start_minutes: fittingSlots[0].start,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeChunkBounds(task: TaskItem) {
+  if (task.type === 'buffer') {
+    return {
+      minDuration: task.duration,
+      maxDuration: task.duration,
+    };
+  }
+
+  if (task.type === 'focus') {
+    const minDuration = Math.min(task.duration, Math.max(task.min_duration ?? 30, SNAP_MINUTES));
+    return {
+      minDuration,
+      maxDuration: Math.min(task.duration, Math.max(task.max_duration ?? Math.min(task.duration, 120), minDuration)),
+    };
+  }
+
+  const minDuration = Math.min(task.duration, Math.max(task.min_duration ?? 30, SNAP_MINUTES));
+  return {
+    minDuration,
+    maxDuration: Math.min(task.duration, Math.max(task.max_duration ?? task.duration, minDuration)),
+  };
+}
+
+function allocateSplitBlocks(
+  task: TaskItem,
+  blocksByDate: Map<string, ScheduleBlock[]>,
+  startDate: string,
+  endDate: string,
+  allowPartial: boolean,
+) {
+  const { earliest, latest } = getTaskHorizon(task, startDate, endDate);
+  const { minDuration, maxDuration } = normalizeChunkBounds(task);
+  const candidateEnd = allowPartial ? endDate : latest;
+  let remaining = task.duration;
+  let segmentIndex = 0;
+  const createdBlocks: ScheduleBlock[] = [];
+
+  for (let dateKey = earliest; dateKey <= candidateEnd && remaining > 0; dateKey = addDays(dateKey, 1)) {
+    const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
+    const windows = getTaskWindows(task);
+
+    for (const window of windows) {
+      if (remaining <= 0) {
+        break;
+      }
+
+      const gaps = findFreeGaps(dateBlocks, window.start_minutes, window.end_minutes);
+      for (const gap of gaps) {
+        if (remaining <= 0) {
+          break;
+        }
+
+        const chunk = fitChunkDuration(remaining, gap.end - gap.start, minDuration, maxDuration);
+        if (!chunk) {
+          continue;
+        }
+
+        segmentIndex += 1;
+        const block: ScheduleBlock = {
+          id: `${task.id}::${segmentIndex}`,
+          task_id: task.id,
+          title: task.title,
+          description: task.description,
+          type: task.type,
+          priority: task.priority,
+          duration: chunk,
+          scheduled_date: dateKey,
+          start_minutes: gap.start,
+          hours_ranges: task.hours_ranges,
+          deadline: task.deadline,
+          done: task.done,
+          is_split_segment: true,
+          segment_index: segmentIndex,
+          segment_count: 0,
+        };
+
+        remaining -= chunk;
+        createdBlocks.push(block);
+        pushBlock(blocksByDate, block);
+      }
+    }
+  }
+
+  if (!allowPartial && remaining > 0) {
+    createdBlocks.forEach((block) => {
+      const dateBlocks = getBlockMapForDate(blocksByDate, block.scheduled_date).filter((entry) => entry.id !== block.id);
+      blocksByDate.set(block.scheduled_date, dateBlocks);
+    });
+    return [];
+  }
+
+  createdBlocks.forEach((block) => {
+    block.segment_count = createdBlocks.length || 1;
+  });
+
+  return createdBlocks;
+}
+
 function findFreeGaps(blocks: ScheduleBlock[], windowStart: number, windowEnd: number) {
   const relevant = [...blocks]
     .filter((block) => block.start_minutes < windowEnd && block.start_minutes + block.duration > windowStart)
@@ -251,84 +471,57 @@ function fitChunkDuration(remaining: number, gapSize: number, minDuration: numbe
 }
 
 export function buildScheduleBlocks(tasks: TaskItem[], startDate: string, endDate: string): ScheduleBlock[] {
-  const fixedTasks = sortTasksChronologically(tasks.filter((task) => !isFlexibleTask(task) || task.done));
-  const flexibleTasks = sortTasksChronologically(tasks.filter((task) => isFlexibleTask(task) && !task.done)).sort(compareTaskImportance);
   const blocksByDate = new Map<string, ScheduleBlock[]>();
+  const lockedTasks = sortTasksChronologically(tasks.filter((task) => task.done));
+  const habitTasks = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'buffer')).sort(compareHabitPreference);
+  const taskItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'task')).sort(compareTaskImportance);
+  const focusItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'focus')).sort(compareFocusFlexibility);
 
-  fixedTasks.forEach((task) => {
+  lockedTasks.forEach((task) => {
     const block = toBlock(task);
-    const current = blocksByDate.get(block.scheduled_date) ?? [];
-    current.push(block);
-    blocksByDate.set(block.scheduled_date, current);
+    pushBlock(blocksByDate, block);
   });
 
-  const flexibleBlocks: ScheduleBlock[] = [];
+  const optimizedBlocks: ScheduleBlock[] = lockedTasks.map(toBlock);
 
-  flexibleTasks.forEach((task) => {
-    const minDuration = Math.max(task.min_duration ?? SNAP_MINUTES, SNAP_MINUTES);
-    const maxDuration = Math.max(task.max_duration ?? task.duration, minDuration);
-    const scheduleAfter = task.schedule_after && task.schedule_after > startDate ? task.schedule_after : startDate;
-    const windows = getTaskWindows(task);
-    let remaining = task.duration;
-    let segmentIndex = 0;
+  habitTasks.forEach((task) => {
+    const placement = findDiscretePlacement(task, blocksByDate, startDate, endDate);
+    const block = toBlock({
+      ...task,
+      scheduled_date: placement?.scheduled_date ?? task.scheduled_date,
+      start_minutes: placement?.start_minutes ?? task.start_minutes,
+    });
+    pushBlock(blocksByDate, block);
+    optimizedBlocks.push(block);
+  });
 
-    for (let dateKey = scheduleAfter; dateKey <= endDate && remaining > 0; dateKey = addDays(dateKey, 1)) {
-      const dateBlocks = blocksByDate.get(dateKey) ?? [];
-
-      windows.forEach((window) => {
-        if (remaining <= 0) {
-          return;
-        }
-
-        const gaps = findFreeGaps(dateBlocks, window.start_minutes, window.end_minutes);
-
-        gaps.forEach((gap) => {
-          if (remaining <= 0) {
-            return;
-          }
-
-          const chunk = fitChunkDuration(remaining, gap.end - gap.start, minDuration, maxDuration);
-          if (!chunk) {
-            return;
-          }
-
-          segmentIndex += 1;
-          const block: ScheduleBlock = {
-            id: `${task.id}::${segmentIndex}`,
-            task_id: task.id,
-            title: task.title,
-            description: task.description,
-            type: task.type,
-            priority: task.priority,
-            duration: chunk,
-            scheduled_date: dateKey,
-            start_minutes: gap.start,
-            hours_ranges: task.hours_ranges,
-            deadline: task.deadline,
-            done: task.done,
-            is_split_segment: true,
-            segment_index: segmentIndex,
-            segment_count: 0,
-          };
-
-          remaining -= chunk;
-          flexibleBlocks.push(block);
-          dateBlocks.push(block);
-          dateBlocks.sort((left, right) => left.start_minutes - right.start_minutes);
-          blocksByDate.set(dateKey, dateBlocks);
-        });
-      });
+  taskItems.forEach((task) => {
+    const blocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, false);
+    if (blocks.length > 0) {
+      optimizedBlocks.push(...blocks);
+      return;
     }
 
-    const segmentCount = segmentIndex || 1;
-    flexibleBlocks
-      .filter((block) => block.task_id === task.id)
-      .forEach((block) => {
-        block.segment_count = segmentCount;
-      });
+    const fallback = findPlacement(tasks, task, task.scheduled_date, preferredStart(task), task.id);
+    if (!fallback) {
+      return;
+    }
+
+    const block = toBlock({
+      ...task,
+      scheduled_date: fallback.scheduled_date,
+      start_minutes: fallback.start_minutes,
+    });
+    pushBlock(blocksByDate, block);
+    optimizedBlocks.push(block);
   });
 
-  return [...fixedTasks.map(toBlock), ...flexibleBlocks].sort((left, right) => {
+  focusItems.forEach((task) => {
+    const blocks = allocateSplitBlocks(task, blocksByDate, startDate, endDate, true);
+    optimizedBlocks.push(...blocks);
+  });
+
+  return optimizedBlocks.sort((left, right) => {
     if (left.scheduled_date === right.scheduled_date) {
       return left.start_minutes - right.start_minutes;
     }
@@ -474,18 +667,44 @@ export function autoPlaceDay(tasks: TaskItem[], dateKey: string) {
 export function buildWarnings(tasks: TaskItem[], todayKey: string, selectedDate: string): ScheduleWarning[] {
   const warnings: ScheduleWarning[] = [];
   const activeTasks = tasks.filter((task) => !task.done);
+  const planningDates = activeTasks.length > 0
+    ? {
+        start: activeTasks
+          .map((task) => task.schedule_after ?? task.scheduled_date)
+          .reduce((earliest, current) => (current < earliest ? current : earliest)),
+        end: addDays(
+          activeTasks
+            .map((task) => task.deadline ?? task.scheduled_date)
+            .reduce((latest, current) => (current > latest ? current : latest)),
+          14,
+        ),
+      }
+    : null;
+  const optimizedBlocks = planningDates ? buildScheduleBlocks(activeTasks, planningDates.start, planningDates.end) : [];
+  const blocksByTask = new Map<string, ScheduleBlock[]>();
+
+  optimizedBlocks.forEach((block) => {
+    const current = blocksByTask.get(block.task_id) ?? [];
+    current.push(block);
+    blocksByTask.set(block.task_id, current);
+  });
 
   activeTasks.forEach((task) => {
     if (!task.deadline) {
       return;
     }
 
-    if (task.scheduled_date > task.deadline) {
+    const taskBlocks = blocksByTask.get(task.id) ?? [];
+    const firstBlock = taskBlocks[0];
+    const lastBlock = taskBlocks[taskBlocks.length - 1];
+    const effectiveScheduledDate = firstBlock?.scheduled_date ?? task.scheduled_date;
+
+    if (lastBlock && lastBlock.scheduled_date > task.deadline) {
       warnings.push({
         id: `late-${task.id}`,
         severity: 'critical',
         title: `${task.title} is scheduled after its deadline`,
-        detail: `Currently on ${formatDate(task.scheduled_date, { month: 'short', day: 'numeric' })}; deadline ${formatDate(task.deadline, {
+        detail: `Currently on ${formatDate(lastBlock.scheduled_date, { month: 'short', day: 'numeric' })}; deadline ${formatDate(task.deadline, {
           month: 'short',
           day: 'numeric',
         })}.`,
@@ -521,12 +740,14 @@ export function buildWarnings(tasks: TaskItem[], todayKey: string, selectedDate:
         id: `soon-${task.id}`,
         severity: 'notice',
         title: `${task.title} is approaching its deadline`,
-        detail: `Scheduled ${formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })}.`,
+        detail: `Scheduled ${formatDate(effectiveScheduledDate, { weekday: 'short', month: 'short', day: 'numeric' })}.`,
       });
     }
   });
 
-  const selectedDayItems = sortTasksChronologically(tasks.filter((task) => task.scheduled_date === selectedDate));
+  const selectedDayItems = optimizedBlocks
+    .filter((task) => task.scheduled_date === selectedDate)
+    .sort((left, right) => left.start_minutes - right.start_minutes);
   for (let index = 0; index < selectedDayItems.length - 1; index += 1) {
     const current = selectedDayItems[index];
     const next = selectedDayItems[index + 1];

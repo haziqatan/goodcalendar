@@ -794,7 +794,7 @@ export default function App() {
       done: existingTask?.done ?? false,
     };
 
-    if (isFlexibleTask(item)) {
+    if (item.type === 'task' || item.type === 'focus' || isFlexibleTask(item)) {
       const previewTasks = editingTaskId ? tasks.map((task) => (task.id === editingTaskId ? item : task)) : [...tasks, item];
       const previewStartSeeds = [planningStart, item.schedule_after ?? item.scheduled_date];
       const previewStart = previewStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
@@ -803,7 +803,7 @@ export default function App() {
       const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd).filter((block) => block.task_id === item.id);
 
       if (previewBlocks.length === 0) {
-        setStatusMessage('No open split schedule was found for the selected hours and schedule-after date.');
+        setStatusMessage('No conflict-free schedule was found for the selected hours and deadline window.');
         return;
       }
 
