@@ -1574,6 +1574,51 @@ button {
   transition: background 120ms ease, border-color 120ms ease;
 }
 
+/* Task type row */
+
+.task-type-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--text-2);
+  font-size: 0.82rem;
+  font-weight: 500;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.type-pill:hover {
+  background: var(--line-soft);
+  color: var(--text);
+}
+
+.type-pill.active.type-task {
+  background: var(--primary-soft);
+  border-color: rgba(22, 82, 240, 0.40);
+  color: var(--primary);
+}
+
+.type-pill.active.type-focus {
+  background: var(--violet-soft);
+  border-color: rgba(124, 58, 237, 0.38);
+  color: var(--violet);
+}
+
+.type-pill.active.type-buffer {
+  background: rgba(232, 162, 23, 0.10);
+  border-color: rgba(232, 162, 23, 0.40);
+  color: #78350F;
+}
+
 /* Priority pills */
 
 .priority-row {
@@ -1865,9 +1910,8 @@ button {
 
 .hours-card {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .hours-card__label small,
@@ -1904,6 +1948,51 @@ button {
 
 .hours-card__actions select:focus {
   border-color: var(--primary);
+}
+
+/* Inline hours preset chips */
+
+.hours-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hours-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.hours-preset-chip:hover {
+  background: var(--line-soft);
+  color: var(--text);
+}
+
+.hours-preset-chip.active {
+  background: var(--primary-soft);
+  border-color: rgba(22, 82, 240, 0.40);
+  color: var(--primary);
+}
+
+.hours-preset-chip--edit {
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 5px 9px;
+}
+
+.hours-preset-chip--edit:hover {
+  color: var(--text);
 }
 
 .helper-card {

@@ -8,7 +8,9 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  Coffee,
   Link2,
+  ListTodo,
   MinusCircle,
   MoreHorizontal,
   PanelLeftClose,
@@ -22,6 +24,7 @@ import {
   SmilePlus,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import {
@@ -936,8 +939,8 @@ export default function App() {
         : formatDate(placement.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' });
     const timeLabel = formatDisplayTime(placement.start_minutes);
     const pastDeadline = Boolean(deadlineKey && placement.scheduled_date > deadlineKey);
-    if (pastDeadline) return { text: `Earliest slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
-    return { text: `Will be scheduled ${dateLabel} at ${timeLabel}`, warn: false };
+    if (pastDeadline) return { text: `Best slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
+    return { text: `Best time: ${dateLabel} at ${timeLabel}`, warn: false };
   }, [showTaskModal, draft.scheduleAfterMode, draft.scheduleAfter, draft.duration, draft.hourPresetId, draft.type, draft.deadline, draft.workflowEnabled, tasks, bufferSettings, editingTaskId, selectedDate, todayKey, hourPresets, selectedPreset]);
 
   const calculatedStages = (() => {
@@ -2460,6 +2463,24 @@ export default function App() {
               </div>
               {!draft.title.trim() ? <p className="modal-error">Task title is required</p> : null}
 
+              {/* ── Task type ── */}
+              <div className="task-type-row">
+                {([
+                  { value: 'task',   label: 'Task',   icon: <ListTodo size={14} /> },
+                  { value: 'focus',  label: 'Focus',  icon: <Zap size={14} /> },
+                  { value: 'buffer', label: 'Buffer', icon: <Coffee size={14} /> },
+                ] as { value: TaskType; label: string; icon: React.ReactNode }[]).map(({ value, label, icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`type-pill type-${value}${draft.type === value ? ' active' : ''}`}
+                    onClick={() => setDraft((prev) => ({ ...prev, type: value, workflowEnabled: value !== 'task' ? false : prev.workflowEnabled }))}
+                  >
+                    {icon}{label}
+                  </button>
+                ))}
+              </div>
+
               {/* ── Priority ── */}
               <div className="priority-row">
                 {(['critical', 'high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
@@ -2478,7 +2499,7 @@ export default function App() {
               {!draft.workflowEnabled ? (
                 <div className="modal-card modal-card--duration">
                   <div>
-                    <span>Duration</span>
+                    <span>{draft.type === 'focus' ? 'Focus duration' : draft.type === 'buffer' ? 'Block duration' : 'Duration'}</span>
                     <strong>{draft.duration >= 60 ? `${draft.duration / 60} hr${draft.duration >= 120 ? 's' : ''}` : `${draft.duration} min`}</strong>
                   </div>
                   <div className="duration-controls">
@@ -2529,9 +2550,10 @@ export default function App() {
 
               {/* ── Scheduling hint ── */}
               {draftSchedulingHint ? (
-                <p className={`scheduling-hint${draftSchedulingHint.warn ? ' scheduling-hint--warn' : ''}`}>
-                  {draftSchedulingHint.warn ? '⚠ ' : '✓ '}{draftSchedulingHint.text}
-                </p>
+                <div className={`scheduling-hint${draftSchedulingHint.warn ? ' scheduling-hint--warn' : ''}`}>
+                  {draftSchedulingHint.warn ? <Zap size={14} /> : <CalendarRange size={14} />}
+                  <span>{draftSchedulingHint.text}</span>
+                </div>
               ) : null}
 
               {/* ── More options accordion ── */}
@@ -2546,26 +2568,31 @@ export default function App() {
 
               {showMoreOptions ? (
                 <div className="more-options-body">
-                  {/* Hours */}
+                  {/* Hours — inline chips */}
                   <div className="modal-card hours-card">
                     <div className="hours-card__label">
                       <span>Hours</span>
                       <small>{presetSummary(selectedPreset)}</small>
                     </div>
-                    <div className="hours-card__actions">
-                      <select value={draft.hourPresetId} onChange={(event) => setDraft((prev) => ({ ...prev, hourPresetId: event.target.value }))}>
-                        {hourPresets.map((preset) => (
-                          <option key={preset.id} value={preset.id}>{preset.name}</option>
-                        ))}
-                      </select>
-                      <button type="button" className="ghost-btn" onClick={() => setShowHoursSettings(true)}>
-                        <Settings2 size={16} /> Edit
+                    <div className="hours-preset-chips">
+                      {hourPresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`hours-preset-chip${draft.hourPresetId === preset.id ? ' active' : ''}`}
+                          onClick={() => setDraft((prev) => ({ ...prev, hourPresetId: preset.id }))}
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                      <button type="button" className="hours-preset-chip hours-preset-chip--edit" onClick={() => setShowHoursSettings(true)} aria-label="Edit hours">
+                        <Settings2 size={13} />
                       </button>
                     </div>
                   </div>
 
-                  {/* Flexible split */}
-                  {!draft.workflowEnabled ? (
+                  {/* Flexible split — hidden for buffer type */}
+                  {!draft.workflowEnabled && draft.type !== 'buffer' ? (
                     <>
                       <label className="toggle-row">
                         <input type="checkbox" checked={draft.flexible} onChange={(event) => setDraft((prev) => ({ ...prev, flexible: event.target.checked }))} />
@@ -2600,19 +2627,8 @@ export default function App() {
                     </>
                   ) : null}
 
-                  {/* Task type */}
-                  {!draft.workflowEnabled ? (
-                    <label className="modal-card">
-                      <span>Type</span>
-                      <select value={draft.type} onChange={(event) => setDraft((prev) => ({ ...prev, type: event.target.value as TaskType }))}>
-                        <option value="task">Task</option>
-                        <option value="focus">Focus</option>
-                        <option value="buffer">Buffer</option>
-                      </select>
-                    </label>
-                  ) : null}
-
-                  {/* Workflow */}
+                  {/* Workflow — task type only */}
+                  {draft.type === 'task' ? (
                   <div className="workflow-section">
                     <label className="workflow-toggle-row">
                       <input type="checkbox" checked={draft.workflowEnabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowEnabled: event.target.checked }))} />
@@ -2663,6 +2679,7 @@ export default function App() {
                       )
                     ) : null}
                   </div>
+                  ) : null}
 
                   {/* Notes */}
                   <label className="modal-card notes-card">
@@ -2677,7 +2694,9 @@ export default function App() {
                   <button type="button" className="ghost-btn danger-btn" onClick={() => void deleteTask()}>Delete</button>
                 ) : null}
                 <button type="button" className="ghost-btn" onClick={closeTaskModal}>Cancel</button>
-                <button type="submit" className="primary-btn">{editingTaskId ? 'Save changes' : 'Create'}</button>
+                <button type="submit" className="primary-btn">
+                  {editingTaskId ? 'Save changes' : draft.type === 'buffer' ? 'Add Buffer' : draft.workflowEnabled ? 'Create Workflow' : 'Create & Schedule'}
+                </button>
               </div>
             </form>
           </section>
