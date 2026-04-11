@@ -1182,8 +1182,9 @@ export default function App() {
     if (!showTaskModal || draft.workflowEnabled) return null;
     const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) ?? null : null;
     const resolved = resolveDraftPlacement(draft, existingTask);
-    if ('error' in resolved) return { text: resolved.error === 'Selected hours need at least one valid time range.' ? resolved.error : 'No open slot found — try adjusting hours or deadline.', warn: true };
-    const placement = resolved.placement;
+    if ('error' in resolved) return { text: (resolved.error ?? '') === 'Selected hours need at least one valid time range.' ? (resolved.error ?? '') : 'No open slot found — try adjusting hours or deadline.', warn: true };
+    if (!('placement' in resolved)) return null;
+    const placement = (resolved as { placement: { scheduled_date: string; start_minutes: number; afterDeadline: boolean } }).placement;
     const tomorrowKey = addDays(todayKey, 1);
     const dateLabel = placement.scheduled_date === todayKey
       ? 'today'
@@ -1481,7 +1482,7 @@ export default function App() {
       return;
     }
 
-    const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) : null;
+    const existingTask = editingTaskId ? (tasks.find((task) => task.id === editingTaskId) ?? null) : null;
 
     // ── WORKFLOW PATH ──────────────────────────────────────────────────────────
     if (draft.workflowEnabled) {
@@ -1598,10 +1599,14 @@ export default function App() {
     // ── NORMAL PATH ───────────────────────────────────────────────────────────
     const resolved = resolveDraftPlacement(draft, existingTask);
     if ('error' in resolved) {
-      setStatusMessage(resolved.error);
+      setStatusMessage(resolved.error ?? 'Scheduling error.');
       return;
     }
-    const { item, placement } = resolved;
+    if (!('placement' in resolved)) {
+      setStatusMessage('No open slot found for the selected hours and deadline window.');
+      return;
+    }
+    const { item, placement } = resolved as { item: TaskItem; placement: { scheduled_date: string; start_minutes: number; afterDeadline: boolean }; startDt: string; endDt: string };
 
     const previousTasks = tasks;
     setTasks((prev) =>
