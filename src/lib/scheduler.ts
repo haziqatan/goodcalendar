@@ -857,8 +857,10 @@ export function buildWarnings(
     blocksByTask.set(block.task_id, current);
   });
 
+  const nowMs = Date.now();
+
   activeTasks.forEach((task) => {
-    if (!task.deadline) {
+    if (!task.deadline && !task.due_at) {
       return;
     }
 
@@ -867,12 +869,28 @@ export function buildWarnings(
     const lastBlock = taskBlocks[taskBlocks.length - 1];
     const effectiveScheduledDate = firstBlock?.scheduled_date ?? task.scheduled_date;
 
-    if (lastBlock && lastBlock.scheduled_date > task.deadline) {
+    // Compute deadline date and exact due timestamp for time-aware checks
+    const deadlineDate = dateKeyFromDateTime(task.due_at) || task.deadline;
+    if (!deadlineDate) return;
+
+    // "Late" check: last scheduled block is after the deadline date.
+    // If due_at is set, also check whether the block end time exceeds due_at.
+    const lastBlockDate = lastBlock?.scheduled_date;
+    const lastBlockEndMs = lastBlock
+      ? new Date(lastBlock.scheduled_date + 'T00:00:00').getTime() + (lastBlock.start_minutes + lastBlock.duration) * 60_000
+      : null;
+    const dueAtMs = task.due_at ? new Date(task.due_at).getTime() : null;
+
+    const isLate = lastBlockDate
+      ? lastBlockDate > deadlineDate || (dueAtMs !== null && lastBlockEndMs !== null && lastBlockEndMs > dueAtMs)
+      : false;
+
+    if (isLate) {
       warnings.push({
         id: `late-${task.id}`,
         severity: 'critical',
         title: `${task.title} is scheduled after its deadline`,
-        detail: `Currently on ${formatDate(lastBlock.scheduled_date, { month: 'short', day: 'numeric' })}; deadline ${formatDate(task.deadline, {
+        detail: `Currently on ${formatDate(lastBlockDate ?? deadlineDate, { month: 'short', day: 'numeric' })}; deadline ${formatDate(deadlineDate, {
           month: 'short',
           day: 'numeric',
         })}.`,
@@ -880,18 +898,20 @@ export function buildWarnings(
       return;
     }
 
-    if (task.deadline < todayKey) {
+    // "Overdue" check: deadline date is in the past, or due_at timestamp already passed.
+    const isOverdue = dueAtMs !== null ? dueAtMs < nowMs : deadlineDate < todayKey;
+    if (isOverdue) {
       warnings.push({
         id: `overdue-${task.id}`,
         severity: 'critical',
         title: `${task.title} is overdue`,
-        detail: `Deadline passed on ${formatDate(task.deadline, { month: 'short', day: 'numeric' })}.`,
+        detail: `Deadline passed on ${formatDate(deadlineDate, { month: 'short', day: 'numeric' })}.`,
       });
       return;
     }
 
     const distanceToDeadline =
-      (fromDateKey(task.deadline).getTime() - fromDateKey(todayKey).getTime()) / (1000 * 60 * 60 * 24);
+      (fromDateKey(deadlineDate).getTime() - fromDateKey(todayKey).getTime()) / (1000 * 60 * 60 * 24);
 
     if ((task.priority === 'critical' || task.priority === 'high') && distanceToDeadline <= 1) {
       warnings.push({

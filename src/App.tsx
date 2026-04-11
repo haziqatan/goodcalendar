@@ -619,15 +619,36 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Scroll the board to the now-line whenever the planner view is active
-  useEffect(() => {
-    if (view !== 'planner') return;
+  // Scroll the board to the now-line when entering planner, clicking Today,
+  // or navigating to a week that contains today.
+  const scrollToNow = () => {
     const el = boardBodyRef.current;
     if (!el) return;
-    const nowTop = BOARD_TOP_PADDING + nowMinutes * PIXELS_PER_MINUTE;
+    const nowTop = BOARD_TOP_PADDING + getNowMinutes() * PIXELS_PER_MINUTE;
     const offset = Math.max(0, nowTop - el.clientHeight / 3);
     el.scrollTo({ top: offset, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    if (view !== 'planner') return;
+    scrollToNow();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
+
+  useEffect(() => {
+    if (view !== 'planner') return;
+    if (selectedDate !== todayKey) return;
+    scrollToNow();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (view !== 'planner') return;
+    // Only scroll when the visible week contains today
+    if (!weekDates.includes(todayKey)) return;
+    scrollToNow();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStart]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1970,32 +1991,41 @@ export default function App() {
       computeDropPreview(e.clientX, e.clientY, task);
     };
 
-    const onUp = () => {
+    const cleanup = (commit: boolean) => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onCancel);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
 
       if (state.clone) {
         state.clone.style.transition = 'opacity 120ms ease,transform 120ms ease';
         state.clone.style.opacity = '0';
         state.clone.style.transform = 'scale(0.95)';
-        setTimeout(() => state.clone?.remove(), 120);
+        const c = state.clone; state.clone = null;
+        setTimeout(() => c.remove(), 120);
       }
 
       setDraggingTaskId(null);
 
-      if (!state.isDragging) {
+      if (commit && state.isDragging && dropPreviewRef.current?.valid) {
+        void moveTask(taskId, dropPreviewRef.current.date, dropPreviewRef.current.startMinutes, dropPreviewRef.current.snapped);
+      } else if (commit && !state.isDragging) {
         // Tap without drag → open modal
         openEditTaskModalById(taskId);
-      } else if (dropPreviewRef.current?.valid) {
-        void moveTask(taskId, dropPreviewRef.current.date, dropPreviewRef.current.startMinutes, dropPreviewRef.current.snapped);
       }
 
       dragStateRef.current = null;
       updateDropPreview(null);
     };
 
+    const onUp = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onVisibilityChange = () => { if (document.hidden) cleanup(false); };
+
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onCancel);
+    document.addEventListener('visibilitychange', onVisibilityChange);
   };
 
 
