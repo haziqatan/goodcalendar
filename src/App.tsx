@@ -36,7 +36,6 @@ import {
   buildScheduleBlocks,
   buildWarnings,
   clampStart,
-  findConflict,
   findPlacement,
   formatDate,
   formatDisplayRange,
@@ -45,7 +44,6 @@ import {
   fromDateKey,
   isSchedulableTask,
   isFlexibleTask,
-  isWithinTaskWindows,
   sortTasksChronologically,
   startOfWeek,
   toDateKey,
@@ -91,6 +89,7 @@ interface DropPreview {
   date: string;
   startMinutes: number;
   valid: boolean;
+  snapped: boolean; // true when scheduler moved it from raw hover position
   duration: number;
   dayIndex: number;
 }
@@ -1836,71 +1835,29 @@ export default function App() {
     document.addEventListener('keydown', onKey);
   };
 
-  const moveTask = async (taskId: string, dateKey: string, startMinutes: number) => {
+  // Pure commit — placement is already resolved by computeDropPreview.
+  const moveTask = async (taskId: string, dateKey: string, startMinutes: number, snapped: boolean) => {
     const task = tasks.find((entry) => entry.id === taskId);
-    if (!task) {
-      return;
-    }
+    if (!task) return;
 
+    const afterDeadline = Boolean(task.deadline && dateKey > task.deadline);
     const previousTasks = tasks;
-    const desiredStart = clampStart(startMinutes, task.duration);
-    const collision = findConflict(schedulableTasks, dateKey, desiredStart, task.duration, task.id);
-    const outsideWindow = Boolean(task.schedule_after && dateKey < task.schedule_after) || !isWithinTaskWindows(task, desiredStart, task.duration);
-    const placement = collision || outsideWindow
-      ? findPlacement(
-          activeSchedulableTasks,
-          {
-            type: task.type,
-            duration: task.duration,
-            due_at: task.due_at,
-            deadline: task.deadline,
-            earliest_start_at: task.earliest_start_at,
-            schedule_after: task.schedule_after,
-            hours_ranges: task.hours_ranges,
-            hours_start: task.hours_start,
-            hours_end: task.hours_end,
-          },
-          dateKey,
-          desiredStart,
-          bufferSettings,
-          task.id,
-        )
-      : { scheduled_date: dateKey, start_minutes: desiredStart, afterDeadline: Boolean(task.deadline && dateKey > task.deadline) };
 
-    if (!placement) {
-      setStatusMessage(`No open slot found for ${task.title}.`);
-      return;
-    }
-
-    const nextTasks = sortTasksChronologically(
+    setTasks(sortTasksChronologically(
       tasks.map((entry) =>
         entry.id === taskId
-          ? {
-              ...entry,
-              scheduled_date: placement.scheduled_date,
-              start_minutes: placement.start_minutes,
-            }
+          ? { ...entry, scheduled_date: dateKey, start_minutes: startMinutes }
           : entry,
       ),
-    );
-
-    setTasks(nextTasks);
-    focusDate(placement.scheduled_date);
+    ));
+    focusDate(dateKey);
     setStatusMessage(
-      collision || outsideWindow
-        ? `${task.title} was snapped to ${formatDisplayTime(placement.start_minutes)} on ${formatDate(placement.scheduled_date, {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-          })} to avoid overlap${placement.afterDeadline ? ', after its deadline window.' : '.'}`
-        : `${task.title} moved to ${formatDisplayTime(placement.start_minutes)}${placement.afterDeadline ? ' after its deadline window.' : '.'}`,
+      snapped
+        ? `${task.title} snapped to ${formatDisplayTime(startMinutes)} on ${formatDate(dateKey, { weekday: 'short', month: 'short', day: 'numeric' })}${afterDeadline ? ' — past due date.' : '.'}`
+        : `${task.title} moved to ${formatDisplayTime(startMinutes)}${afterDeadline ? ' — past due date.' : '.'}`,
     );
 
-    await persistTaskUpdate(
-      taskId,
-      { scheduled_date: placement.scheduled_date, start_minutes: placement.start_minutes },
-      previousTasks,
-    );
+    await persistTaskUpdate(taskId, { scheduled_date: dateKey, start_minutes: startMinutes }, previousTasks);
   };
 
   // ── Pointer-based drag for calendar task cards ───────────────────────────────
@@ -1929,11 +1886,38 @@ export default function App() {
     const dayWidth = Math.max((bounds.width - TIME_GUTTER) / 7, 1);
     const dayIndex = Math.max(0, Math.min(6, Math.floor(relativeX / dayWidth)));
     const rawMinutes = (clientY - bounds.top + board.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE + boardWindow.start;
-    const startMinutes = clampStart(rawMinutes, task.duration);
-    const date = weekDates[dayIndex];
-    const conflict = findConflict(schedulableTasks, date, startMinutes, task.duration, task.id);
-    const inWindow = isWithinTaskWindows(task, startMinutes, task.duration);
-    updateDropPreview({ date, startMinutes, valid: !conflict && inWindow, duration: task.duration, dayIndex });
+    const hoverMinutes = clampStart(rawMinutes, task.duration);
+    const hoverDate = weekDates[dayIndex];
+
+    // Use the same placement engine as moveTask / submitTask so preview always
+    // matches the final saved position — including earliest_start_at, due_at,
+    // working-hour windows, buffer padding, and conflict snapping.
+    const placement = findPlacement(
+      activeSchedulableTasks,
+      {
+        type: task.type,
+        duration: task.duration,
+        due_at: task.due_at,
+        deadline: task.deadline,
+        earliest_start_at: task.earliest_start_at,
+        schedule_after: task.schedule_after,
+        hours_ranges: task.hours_ranges,
+        hours_start: task.hours_start,
+        hours_end: task.hours_end,
+      },
+      hoverDate,
+      hoverMinutes,
+      bufferSettings,
+      task.id,
+    );
+
+    if (!placement) {
+      updateDropPreview({ date: hoverDate, startMinutes: hoverMinutes, valid: false, snapped: false, duration: task.duration, dayIndex });
+      return;
+    }
+
+    const snapped = placement.scheduled_date !== hoverDate || placement.start_minutes !== hoverMinutes;
+    updateDropPreview({ date: placement.scheduled_date, startMinutes: placement.start_minutes, valid: true, snapped, duration: task.duration, dayIndex });
   };
 
   const handleTaskPointerDown = (event: React.PointerEvent<HTMLElement>, taskId: string, draggable: boolean) => {
@@ -2003,7 +1987,7 @@ export default function App() {
         // Tap without drag → open modal
         openEditTaskModalById(taskId);
       } else if (dropPreviewRef.current?.valid) {
-        void moveTask(taskId, dropPreviewRef.current.date, dropPreviewRef.current.startMinutes);
+        void moveTask(taskId, dropPreviewRef.current.date, dropPreviewRef.current.startMinutes, dropPreviewRef.current.snapped);
       }
 
       dragStateRef.current = null;
