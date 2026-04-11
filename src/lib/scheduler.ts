@@ -97,6 +97,63 @@ function overlaps(aStart: number, aDuration: number, bStart: number, bDuration: 
   return aStart < bStart + bDuration && bStart < aStart + aDuration;
 }
 
+function dateKeyFromDateTime(value?: string) {
+  if (!value) {
+    return '';
+  }
+  const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? '';
+}
+
+function minutesFromDateTime(value?: string, fallback = AUTO_START_MINUTES) {
+  if (!value) {
+    return fallback;
+  }
+  const match = value.trim().match(/^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})/);
+  if (!match) {
+    return fallback;
+  }
+  return (Number(match[1]) * 60) + Number(match[2]);
+}
+
+function taskEarliestDate(task: Pick<TaskItem, 'earliest_start_at' | 'schedule_after' | 'scheduled_date'>) {
+  return dateKeyFromDateTime(task.earliest_start_at) || task.schedule_after || task.scheduled_date;
+}
+
+function taskEarliestStart(task: Pick<TaskItem, 'earliest_start_at' | 'hours_ranges' | 'hours_start' | 'hours_end'>) {
+  const windows = getTaskWindows(task);
+  return dateKeyFromDateTime(task.earliest_start_at)
+    ? minutesFromDateTime(task.earliest_start_at, windows[0]?.start_minutes ?? AUTO_START_MINUTES)
+    : (windows[0]?.start_minutes ?? AUTO_START_MINUTES);
+}
+
+function taskEarliestFloorForDate(
+  task: Pick<TaskItem, 'earliest_start_at'>,
+  dateKey: string,
+) {
+  const exactDate = dateKeyFromDateTime(task.earliest_start_at);
+  if (!exactDate || exactDate !== dateKey) {
+    return 0;
+  }
+  return minutesFromDateTime(task.earliest_start_at, 0);
+}
+
+function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at ?? task.deadline;
+}
+
+export function isWorkflowMetadataParent(
+  task: Pick<TaskItem, 'workflow_config' | 'workflow_parent_id' | 'workflow_stage_id'>,
+) {
+  return Boolean(task.workflow_config && !task.workflow_parent_id && !task.workflow_stage_id);
+}
+
+export function isSchedulableTask(
+  task: Pick<TaskItem, 'workflow_config' | 'workflow_parent_id' | 'workflow_stage_id'>,
+) {
+  return !isWorkflowMetadataParent(task);
+}
+
 function isTaskOrHabit(type: TaskItem['type']) {
   return type === 'task' || type === 'buffer';
 }
@@ -127,6 +184,7 @@ export function findConflict(
   return tasks.find(
     (task) =>
       !task.done &&
+      isSchedulableTask(task) &&
       task.id !== excludeId &&
       task.scheduled_date === dateKey &&
       overlaps(task.start_minutes, task.duration, startMinutes, duration),
@@ -149,7 +207,7 @@ function findSlotOnDate(
   const firstStart = clampStart(Math.max(normalizedWindowStart, startMinutes), task.duration);
   for (let cursor = firstStart; cursor + task.duration <= normalizedWindowEnd; cursor += SNAP_MINUTES) {
     const collision = tasks.find((entry) => {
-      if (entry.done || entry.id === excludeId || entry.scheduled_date !== dateKey) {
+      if (entry.done || !isSchedulableTask(entry) || entry.id === excludeId || entry.scheduled_date !== dateKey) {
         return false;
       }
 
@@ -233,14 +291,14 @@ function compareTaskImportance(left: TaskItem, right: TaskItem) {
     return priorityDifference;
   }
 
-  const leftDeadline = left.deadline ?? '9999-12-31';
-  const rightDeadline = right.deadline ?? '9999-12-31';
+  const leftDeadline = taskDueValue(left) ?? '9999-12-31';
+  const rightDeadline = taskDueValue(right) ?? '9999-12-31';
   if (leftDeadline !== rightDeadline) {
     return leftDeadline.localeCompare(rightDeadline);
   }
 
-  const leftScheduleAfter = left.schedule_after ?? left.scheduled_date;
-  const rightScheduleAfter = right.schedule_after ?? right.scheduled_date;
+  const leftScheduleAfter = taskEarliestDate(left);
+  const rightScheduleAfter = taskEarliestDate(right);
   if (leftScheduleAfter !== rightScheduleAfter) {
     return leftScheduleAfter.localeCompare(rightScheduleAfter);
   }
@@ -249,15 +307,11 @@ function compareTaskImportance(left: TaskItem, right: TaskItem) {
 }
 
 function preferredDate(task: TaskItem) {
-  return task.schedule_after ?? task.scheduled_date;
+  return taskEarliestDate(task);
 }
 
 function preferredStart(task: TaskItem) {
-  const windows = getTaskWindows(task);
-  // Use the window start — not task.start_minutes — so we always search from
-  // the earliest valid time in the task's allowed hours, not from a stale
-  // previously-placed position that could skip over earlier free slots.
-  return windows[0]?.start_minutes ?? AUTO_START_MINUTES;
+  return taskEarliestStart(task);
 }
 
 function buildDateSpan(startDate: string, endDate: string) {
@@ -300,7 +354,7 @@ function compareFocusFlexibility(left: TaskItem, right: TaskItem) {
 
 function getTaskHorizon(task: TaskItem, startDate: string, endDate: string) {
   const earliest = preferredDate(task) > startDate ? preferredDate(task) : startDate;
-  const naturalLatest = task.deadline ?? addDays(task.scheduled_date, task.type === 'buffer' ? 2 : 7);
+  const naturalLatest = dateKeyFromDateTime(task.due_at) || task.deadline || addDays(task.scheduled_date, task.type === 'buffer' ? 2 : 7);
   const latest = naturalLatest > endDate ? endDate : naturalLatest;
   return {
     earliest,
@@ -381,15 +435,17 @@ function findDiscretePlacement(
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
     const nowFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
+    const earliestFloor = taskEarliestFloorForDate(task, dateKey);
+    const dayFloor = Math.max(nowFloor, earliestFloor);
 
     for (const window of windows) {
       const gaps = findBufferedGaps(dateBlocks, task.type, window.start_minutes, window.end_minutes, bufferSettings, includeFlexibleBuffer);
       const fittingSlots = gaps
-        .filter((gap) => gap.end > Math.max(gap.start, nowFloor) && gap.end - Math.max(gap.start, nowFloor) >= task.duration)
+        .filter((gap) => gap.end > Math.max(gap.start, dayFloor) && gap.end - Math.max(gap.start, dayFloor) >= task.duration)
         .map((gap) => {
-          const effectiveGapStart = Math.max(gap.start, nowFloor);
+          const effectiveGapStart = Math.max(gap.start, dayFloor);
           const desired = clampStart(
-            dateKey === preferred ? preferredMinute : window.start_minutes,
+            dateKey === preferred ? preferredMinute : Math.max(window.start_minutes, earliestFloor),
             task.duration,
           );
           const start = Math.min(Math.max(effectiveGapStart, desired), gap.end - task.duration);
@@ -457,7 +513,9 @@ function allocateSplitBlocks(
     const dateBlocks = getBlockMapForDate(blocksByDate, dateKey);
     const windows = getTaskWindows(task);
     // Never schedule before current time on today's date.
-    const dayTimeFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
+    const nowFloor = nowDateKey && dateKey === nowDateKey ? nowMinutes : 0;
+    const earliestFloor = taskEarliestFloorForDate(task, dateKey);
+    const dayTimeFloor = Math.max(nowFloor, earliestFloor);
 
     for (const window of windows) {
       if (remaining <= 0) {
@@ -570,11 +628,13 @@ export function buildScheduleBlocks(
   nowDateKey = '',
   nowMinutes = 0,
 ): ScheduleBlock[] {
+  const schedulableTasks = tasks.filter(isSchedulableTask);
   const blocksByDate = new Map<string, ScheduleBlock[]>();
-  const doneTasks = tasks.filter((task) => task.done);
-  const habitTasks = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'buffer')).sort(compareHabitPreference);
-  const taskItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'task')).sort(compareTaskImportance);
-  const focusItems = sortTasksChronologically(tasks.filter((task) => !task.done && task.type === 'focus')).sort(compareFocusFlexibility);
+  const doneTasks = schedulableTasks.filter((task) => task.done);
+  const activeTasks = schedulableTasks.filter((task) => !task.done);
+  const habitTasks = sortTasksChronologically(activeTasks.filter((task) => task.type === 'buffer')).sort(compareHabitPreference);
+  const taskItems = sortTasksChronologically(activeTasks.filter((task) => task.type === 'task')).sort(compareTaskImportance);
+  const focusItems = sortTasksChronologically(activeTasks.filter((task) => task.type === 'focus')).sort(compareFocusFlexibility);
 
   // Done tasks are shown in the UI but do NOT occupy slots for scheduling.
   const optimizedBlocks: ScheduleBlock[] = doneTasks.map(toBlock);
@@ -605,7 +665,7 @@ export function buildScheduleBlocks(
       return;
     }
 
-    const fallback = findPlacement(tasks, task, task.scheduled_date, preferredStart(task), bufferSettings, task.id);
+    const fallback = findPlacement(activeTasks, task, task.scheduled_date, preferredStart(task), bufferSettings, task.id);
     if (!fallback) {
       return;
     }
@@ -637,14 +697,18 @@ export function buildScheduleBlocks(
 
 export function findPlacement(
   tasks: TaskItem[],
-  task: Pick<TaskItem, 'type' | 'duration' | 'deadline' | 'schedule_after' | 'hours_ranges' | 'hours_start' | 'hours_end'>,
+  task: Pick<TaskItem, 'type' | 'duration' | 'deadline' | 'schedule_after' | 'hours_ranges' | 'hours_start' | 'hours_end' | 'earliest_start_at' | 'due_at'>,
   preferredDate: string,
   preferredStart: number,
   bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
   excludeId?: string,
 ) {
-  const earliestDate = task.schedule_after && task.schedule_after > preferredDate ? task.schedule_after : preferredDate;
-  const deadline = task.deadline && task.deadline >= earliestDate ? task.deadline : earliestDate;
+  const exactEarliestDate = dateKeyFromDateTime(task.earliest_start_at);
+  const exactEarliestStart = minutesFromDateTime(task.earliest_start_at, preferredStart);
+  const scheduleAfterDate = exactEarliestDate || task.schedule_after || preferredDate;
+  const earliestDate = scheduleAfterDate > preferredDate ? scheduleAfterDate : preferredDate;
+  const deadlineDate = dateKeyFromDateTime(task.due_at) || task.deadline;
+  const deadline = deadlineDate && deadlineDate >= earliestDate ? deadlineDate : earliestDate;
   const windows = getTaskWindows(task);
 
   const attempt = (includeFlexibleBuffer: boolean, searchStartDate: string, forceAfterDeadline = false) => {
@@ -656,7 +720,9 @@ export function findPlacement(
             tasks,
             dateKey,
             task,
-            offset === 0 ? preferredStart : window.start_minutes,
+            offset === 0
+              ? Math.max(preferredStart, exactEarliestDate === dateKey ? exactEarliestStart : window.start_minutes)
+              : Math.max(window.start_minutes, exactEarliestDate === dateKey ? exactEarliestStart : window.start_minutes),
             window.start_minutes,
             window.end_minutes,
             bufferSettings,
@@ -669,10 +735,10 @@ export function findPlacement(
         return {
           scheduled_date: dateKey,
           start_minutes: slot,
-          afterDeadline: forceAfterDeadline || Boolean(task.deadline && dateKey > deadline),
+          afterDeadline: forceAfterDeadline || Boolean(deadlineDate && dateKey > deadline),
         };
       }
-      if (!forceAfterDeadline && dateKey >= deadline && task.deadline) {
+      if (!forceAfterDeadline && dateKey >= deadline && deadlineDate) {
         break;
       }
     }
@@ -684,7 +750,7 @@ export function findPlacement(
     return firstPass;
   }
 
-  if (!task.deadline) {
+  if (!deadlineDate) {
     return null;
   }
 
@@ -705,18 +771,19 @@ function compareDeadline(left?: string, right?: string) {
 }
 
 export function autoPlaceDay(tasks: TaskItem[], dateKey: string, bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS) {
+  const schedulableTasks = tasks.filter(isSchedulableTask);
   const seeds = [
     dateKey,
-    ...tasks.map((task) => task.schedule_after ?? task.scheduled_date),
+    ...schedulableTasks.map((task) => task.schedule_after ?? task.scheduled_date),
   ];
   const planningStart = seeds.reduce((earliest, current) => (current < earliest ? current : earliest));
   const planningEnd = addDays(
-    tasks
+    schedulableTasks
       .map((task) => task.deadline ?? task.scheduled_date)
       .reduce((latest, current) => (current > latest ? current : latest), dateKey),
     14,
   );
-  const optimizedBlocks = buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings);
+  const optimizedBlocks = buildScheduleBlocks(schedulableTasks, planningStart, planningEnd, bufferSettings);
   const firstBlocks = new Map<string, ScheduleBlock>();
 
   optimizedBlocks.forEach((block) => {
@@ -729,7 +796,7 @@ export function autoPlaceDay(tasks: TaskItem[], dateKey: string, bufferSettings:
   let unresolved = 0;
   const nextTasks = sortTasksChronologically(
     tasks.map((task) => {
-      if (task.done) {
+      if (task.done || !isSchedulableTask(task)) {
         return task;
       }
 
@@ -767,7 +834,7 @@ export function buildWarnings(
   bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS,
 ): ScheduleWarning[] {
   const warnings: ScheduleWarning[] = [];
-  const activeTasks = tasks.filter((task) => !task.done);
+  const activeTasks = tasks.filter((task) => !task.done && isSchedulableTask(task));
   const planningDates = activeTasks.length > 0
     ? {
         start: activeTasks

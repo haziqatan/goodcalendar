@@ -1,6 +1,7 @@
 export type TaskType = 'task' | 'focus' | 'buffer';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 export type WarningSeverity = 'critical' | 'warning' | 'notice';
+export type WorkflowAllocationMode = 'auto' | 'manual';
 
 export interface TimeRange {
   start_minutes: number;
@@ -25,6 +26,7 @@ export interface WorkflowStage {
 
 export interface WorkflowConfig {
   stages: WorkflowStage[];
+  allocation_mode?: WorkflowAllocationMode;
 }
 
 export interface TaskItem {
@@ -40,7 +42,9 @@ export interface TaskItem {
   hours_start?: number;
   hours_end?: number;
   hours_ranges?: TimeRange[];
+  earliest_start_at?: string;
   schedule_after?: string;
+  due_at?: string;
   deadline?: string;
   scheduled_date: string;
   start_minutes: number;

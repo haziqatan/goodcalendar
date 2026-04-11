@@ -43,13 +43,14 @@ import {
   formatDisplayTime,
   formatTime,
   fromDateKey,
+  isSchedulableTask,
   isFlexibleTask,
   isWithinTaskWindows,
   sortTasksChronologically,
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowConfig, WorkflowStage } from './types';
+import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowAllocationMode, WorkflowConfig, WorkflowStage } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -78,6 +79,7 @@ interface TaskDraft {
   deadline: string;
   description: string;
   workflowEnabled: boolean;
+  workflowAllocationMode: WorkflowAllocationMode;
   workflowStages: WorkflowStage[];
 }
 
@@ -111,19 +113,25 @@ const DEFAULT_WORKFLOW_STAGES: WorkflowStage[] = [
 ];
 
 // startDt / endDt are ISO datetime strings "YYYY-MM-DDTHH:mm"
-type StagedWorkflowItem = WorkflowStage & { startDt: string; endDt: string };
+type StagedWorkflowItem = WorkflowStage & {
+  startDt: string;
+  endDt: string;
+  afterDeadline: boolean;
+  unscheduledReason?: string;
+};
 
 // ── DateTime helpers ──────────────────────────────────────────────────────────
 
 // Parse "YYYY-MM-DDTHH:mm" or "YYYY-MM-DD" → Date (local)
 function parseDt(dt: string): Date {
-  if (dt.includes('T')) {
-    const [datePart, timePart] = dt.split('T');
+  const normalized = dt.includes(' ') && !dt.includes('T') ? dt.replace(' ', 'T') : dt;
+  if (normalized.includes('T')) {
+    const [datePart, timePart] = normalized.split('T');
     const [y, mo, d] = datePart.split('-').map(Number);
     const [h, mi] = timePart.split(':').map(Number);
     return new Date(y, mo - 1, d, h, mi);
   }
-  return fromDateKey(dt);
+  return fromDateKey(normalized);
 }
 
 // Format a Date → "YYYY-MM-DDTHH:mm"
@@ -208,23 +216,18 @@ function autoDistributeStages(stages: WorkflowStage[], totalMinutes: number): Wo
   });
 }
 
-// Forward-chain enabled stages from scheduleAfter dt string using their minutes
-function calculateStageTimeline(stages: WorkflowStage[], scheduleAfterDt: string): StagedWorkflowItem[] {
-  if (!scheduleAfterDt || stages.length === 0) {
-    return stages.map((s) => ({ ...s, startDt: '', endDt: '' }));
+function resolveWorkflowStageDurations(
+  stages: WorkflowStage[],
+  allocationMode: WorkflowAllocationMode,
+  scheduleAfterDt: string,
+  dueAt?: string,
+) {
+  if (allocationMode !== 'auto' || !scheduleAfterDt || !dueAt) {
+    return stages;
   }
-  const result: StagedWorkflowItem[] = [];
-  let cursor = scheduleAfterDt;
-  for (const stage of stages) {
-    if (!stage.enabled) {
-      result.push({ ...stage, startDt: '', endDt: '' });
-      continue;
-    }
-    const endDt = addMinutesToDt(cursor, stage.minutes);
-    result.push({ ...stage, startDt: cursor, endDt });
-    cursor = endDt;
-  }
-  return result;
+
+  const totalMinutes = minutesBetweenDt(scheduleAfterDt, dueAt);
+  return totalMinutes > 0 ? autoDistributeStages(stages, totalMinutes) : stages;
 }
 const TIME_GUTTER = 80;
 const DURATION_STEP = 15;
@@ -271,7 +274,9 @@ const starterTasks: TaskItem[] = [
       { start_minutes: 8 * 60, end_minutes: 13 * 60 },
       { start_minutes: 14 * 60, end_minutes: 18 * 60 },
     ],
+    earliest_start_at: dateKeyToDatetime(toDateKey(new Date()), 9, 0),
     schedule_after: toDateKey(new Date()),
+    due_at: dateKeyToDatetime(addDays(toDateKey(new Date()), 1), 18, 0),
     deadline: addDays(toDateKey(new Date()), 1),
     scheduled_date: toDateKey(new Date()),
     start_minutes: 11 * 60 + 45,
@@ -291,7 +296,9 @@ const starterTasks: TaskItem[] = [
       { start_minutes: 8 * 60, end_minutes: 13 * 60 },
       { start_minutes: 14 * 60, end_minutes: 18 * 60 },
     ],
+    earliest_start_at: dateKeyToDatetime(toDateKey(new Date()), 9, 0),
     schedule_after: toDateKey(new Date()),
+    due_at: dateKeyToDatetime(toDateKey(new Date()), 18, 0),
     deadline: toDateKey(new Date()),
     scheduled_date: toDateKey(new Date()),
     start_minutes: 12 * 60 + 45,
@@ -312,7 +319,9 @@ const starterTasks: TaskItem[] = [
       { start_minutes: 8 * 60, end_minutes: 13 * 60 },
       { start_minutes: 14 * 60, end_minutes: 18 * 60 },
     ],
+    earliest_start_at: dateKeyToDatetime(addDays(toDateKey(new Date()), 1), 9, 0),
     schedule_after: addDays(toDateKey(new Date()), 1),
+    due_at: dateKeyToDatetime(addDays(toDateKey(new Date()), 2), 18, 0),
     deadline: addDays(toDateKey(new Date()), 2),
     scheduled_date: addDays(toDateKey(new Date()), 1),
     start_minutes: 13 * 60,
@@ -335,6 +344,25 @@ const navSecondary = [
 
 const bucketOrder: PriorityBucket[] = ['critical', 'high', 'medium', 'low'];
 const taskGroupOrder: TaskGroupType[] = ['buffer', 'task', 'focus'];
+
+function normalizeDatetimeValue(value: string | null | undefined, fallbackHours = 9, fallbackMinutes = 0) {
+  if (!value) {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  const dateTimeMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (dateTimeMatch) {
+    return `${dateTimeMatch[1]}T${dateTimeMatch[2]}:${dateTimeMatch[3]}`;
+  }
+
+  const dateMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (dateMatch) {
+    return dateKeyToDatetime(dateMatch[1], fallbackHours, fallbackMinutes);
+  }
+
+  return '';
+}
 
 function normalizeRanges(ranges?: Array<Partial<TimeRange> | null | undefined>) {
   const normalized = (ranges ?? [])
@@ -396,14 +424,20 @@ function normalizeTask(task: TaskItem) {
       ? normalizeRanges(task.hours_ranges)
       : normalizeRanges([{ start_minutes: task.hours_start, end_minutes: task.hours_end }]);
   const bounds = rangeBounds(ranges);
+  const earliestStartAt = normalizeDatetimeValue(task.earliest_start_at ?? task.schedule_after, 9, 0);
+  const dueAt = normalizeDatetimeValue(task.due_at ?? task.deadline, 18, 0);
 
   return {
     ...task,
     description: task.description ?? '',
     priority: task.priority ?? 'high',
+    earliest_start_at: earliestStartAt || undefined,
     hours_ranges: ranges,
     hours_start: task.hours_start ?? bounds.start_minutes,
     hours_end: task.hours_end ?? bounds.end_minutes,
+    schedule_after: earliestStartAt ? datetimeToDateKey(earliestStartAt) : (task.schedule_after ?? task.scheduled_date),
+    due_at: dueAt || undefined,
+    deadline: dueAt ? datetimeToDateKey(dueAt) : task.deadline,
   };
 }
 
@@ -493,19 +527,15 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     deadline: '',
     description: '',
     workflowEnabled: false,
+    workflowAllocationMode: 'auto',
     workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
   };
 }
 
 function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
   const wfConfig = task.workflow_config;
-  // Upgrade plain date strings to datetime strings
-  const scheduleAfterDt = (task.schedule_after ?? task.scheduled_date).includes('T')
-    ? (task.schedule_after ?? task.scheduled_date)
-    : dateKeyToDatetime(task.schedule_after ?? task.scheduled_date, 9, 0);
-  const deadlineDt = task.deadline
-    ? (task.deadline.includes('T') ? task.deadline : dateKeyToDatetime(task.deadline, 18, 0))
-    : '';
+  const scheduleAfterDt = normalizeDatetimeValue(task.earliest_start_at ?? task.schedule_after ?? task.scheduled_date, 9, 0);
+  const deadlineDt = normalizeDatetimeValue(task.due_at ?? task.deadline, 18, 0);
   return {
     title: task.title,
     type: task.type,
@@ -520,6 +550,7 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     deadline: deadlineDt,
     description: task.description ?? '',
     workflowEnabled: Boolean(wfConfig),
+    workflowAllocationMode: wfConfig?.allocation_mode ?? 'auto',
     workflowStages: wfConfig?.stages
       ? normalizeWorkflowStages(wfConfig.stages)
       : DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
@@ -741,22 +772,32 @@ export default function App() {
     [weekStart],
   );
 
+  const schedulableTasks = useMemo(
+    () => tasks.filter((task) => isSchedulableTask(task)),
+    [tasks],
+  );
+
+  const activeSchedulableTasks = useMemo(
+    () => schedulableTasks.filter((task) => !task.done),
+    [schedulableTasks],
+  );
+
   const planningStart = useMemo(() => {
-    const seeds = [todayKey, weekDates[0], ...tasks.map((task) => task.schedule_after ?? task.scheduled_date)];
+    const seeds = [todayKey, weekDates[0], ...schedulableTasks.map((task) => task.schedule_after ?? task.scheduled_date)];
     return seeds.reduce((earliest, current) => (current < earliest ? current : earliest));
-  }, [tasks, todayKey, weekDates]);
+  }, [schedulableTasks, todayKey, weekDates]);
 
   const planningEnd = useMemo(() => {
-    const seeds = [weekDates[6], ...tasks.map((task) => task.deadline ?? task.scheduled_date)];
+    const seeds = [weekDates[6], ...schedulableTasks.map((task) => task.deadline ?? task.scheduled_date)];
     const latest = seeds.reduce((currentLatest, current) => (current > currentLatest ? current : currentLatest));
     return addDays(latest, 14);
-  }, [tasks, weekDates]);
+  }, [schedulableTasks, weekDates]);
 
   // Do NOT pass nowMinutes here — existing tasks render at their stored
   // start_minutes. The now-floor only applies when placing a new task.
   const optimizedBlocks = useMemo<ScheduleBlock[]>(
-    () => buildScheduleBlocks(tasks, planningStart, planningEnd, bufferSettings),
-    [tasks, planningStart, planningEnd, bufferSettings],
+    () => buildScheduleBlocks(schedulableTasks, planningStart, planningEnd, bufferSettings),
+    [schedulableTasks, planningStart, planningEnd, bufferSettings],
   );
 
   const blocksByTaskId = useMemo(() => {
@@ -780,16 +821,15 @@ export default function App() {
   );
 
   const warnings = useMemo<ScheduleWarning[]>(
-    () => buildWarnings(tasks, todayKey, selectedDate, bufferSettings),
-    [tasks, todayKey, selectedDate, bufferSettings],
+    () => buildWarnings(schedulableTasks, todayKey, selectedDate, bufferSettings),
+    [schedulableTasks, todayKey, selectedDate, bufferSettings],
   );
 
   const filteredOpenTasks = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return tasks
-      .filter((task) => !task.done)
+    return activeSchedulableTasks
       .filter((task) => (normalizedQuery ? task.title.toLowerCase().includes(normalizedQuery) : true));
-  }, [query, tasks]);
+  }, [activeSchedulableTasks, query]);
 
   const groupedTasks = useMemo(() => {
     const grouped: Record<PriorityBucket, TaskItem[]> = {
@@ -880,9 +920,16 @@ export default function App() {
   );
 
   const completionRate = useMemo(() => {
-    if (tasks.length === 0) return 0;
-    return Math.round((tasks.filter((task) => task.done).length / tasks.length) * 100);
-  }, [tasks]);
+    if (schedulableTasks.length === 0) return 0;
+    const totalMinutes = schedulableTasks.reduce((sum, task) => sum + task.duration, 0);
+    if (totalMinutes > 0) {
+      const completedMinutes = schedulableTasks
+        .filter((task) => task.done)
+        .reduce((sum, task) => sum + task.duration, 0);
+      return Math.round((completedMinutes / totalMinutes) * 100);
+    }
+    return Math.round((schedulableTasks.filter((task) => task.done).length / schedulableTasks.length) * 100);
+  }, [schedulableTasks]);
 
   const boardWindow = useMemo(() => {
     const start = 0;
@@ -905,32 +952,238 @@ export default function App() {
   const capacityMinutes = 7 * capacitySource.ranges.reduce((sum, range) => sum + (range.end_minutes - range.start_minutes), 0);
   const freeMinutes = Math.max(capacityMinutes - scheduledMinutes, 0);
 
+  const roundNowToFiveMinutesDt = () => {
+    const now = new Date();
+    now.setMinutes(Math.floor(now.getMinutes() / 5) * 5, 0, 0);
+    return toDtKey(now);
+  };
+
+  const blockEndDt = (block: ScheduleBlock) =>
+    addMinutesToDt(
+      dateKeyToDatetime(block.scheduled_date, Math.floor(block.start_minutes / 60), block.start_minutes % 60),
+      block.duration,
+    );
+
+  const resolveScheduledItemPlacement = (baseItem: TaskItem, scheduledTasks: TaskItem[]) => {
+    const relevantTasks = scheduledTasks.filter((task) => isSchedulableTask(task));
+    const planningStartSeeds = [todayKey, weekDates[0], ...relevantTasks.map((task) => task.schedule_after ?? task.scheduled_date)];
+    const resolvedPlanningStart = planningStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
+    const planningEndSeeds = [weekDates[6], ...relevantTasks.map((task) => task.deadline ?? task.scheduled_date)];
+    const resolvedPlanningEnd = addDays(
+      planningEndSeeds.reduce((latest, current) => (current > latest ? current : latest)),
+      14,
+    );
+    const previewBlocks = buildScheduleBlocks(
+      relevantTasks,
+      resolvedPlanningStart,
+      resolvedPlanningEnd,
+      bufferSettings,
+      todayKey,
+      nowMinutes,
+    ).filter((block) => block.task_id === baseItem.id);
+
+    if (previewBlocks.length === 0) {
+      return { error: 'No conflict-free schedule was found for the selected hours and deadline window.' as const };
+    }
+
+    const firstBlock = previewBlocks[0];
+    const lastBlock = previewBlocks[previewBlocks.length - 1];
+    const startDt = dateKeyToDatetime(
+      firstBlock.scheduled_date,
+      Math.floor(firstBlock.start_minutes / 60),
+      firstBlock.start_minutes % 60,
+    );
+    const endDt = blockEndDt(lastBlock);
+    const afterDeadline = Boolean(baseItem.due_at && parseDt(endDt).getTime() > parseDt(baseItem.due_at).getTime());
+
+    return {
+      item: {
+        ...baseItem,
+        scheduled_date: firstBlock.scheduled_date,
+        start_minutes: firstBlock.start_minutes,
+      },
+      placement: {
+        scheduled_date: firstBlock.scheduled_date,
+        start_minutes: firstBlock.start_minutes,
+        afterDeadline,
+      },
+      startDt,
+      endDt,
+    };
+  };
+
+  const buildDraftTaskItem = (currentDraft: TaskDraft, existingTask: TaskItem | null) => {
+    const duration = clampDuration(currentDraft.duration);
+    const normalizedMinDuration = currentDraft.flexible
+      ? Math.min(clampDuration(Math.min(currentDraft.minDuration, currentDraft.maxDuration)), duration)
+      : undefined;
+    const normalizedMaxDuration = currentDraft.flexible
+      ? Math.min(Math.max(clampDuration(Math.max(currentDraft.minDuration, currentDraft.maxDuration)), normalizedMinDuration ?? DURATION_STEP), duration)
+      : undefined;
+    const resolvedEarliestStartAt = currentDraft.scheduleAfterMode === 'now'
+      ? roundNowToFiveMinutesDt()
+      : (normalizeDatetimeValue(currentDraft.scheduleAfter, 9, 0) || dateKeyToDatetime(selectedDate, 9, 0));
+    const dueAt = normalizeDatetimeValue(currentDraft.deadline, 18, 0) || undefined;
+    const scheduleAfter = datetimeToDateKey(resolvedEarliestStartAt);
+    const scheduleAfterMinutes = datetimeToStartMinutes(resolvedEarliestStartAt);
+    const preset =
+      hourPresets.find((entry) => entry.id === currentDraft.hourPresetId) ??
+      hourPresets[0] ??
+      DEFAULT_HOUR_PRESETS[0];
+    const presetRanges = normalizeRanges(preset.ranges);
+    const presetBounds = rangeBounds(presetRanges);
+
+    if (presetRanges.length === 0) {
+      return { error: 'Selected hours need at least one valid time range.' as const };
+    }
+
+    return {
+      item: {
+        id: existingTask?.id ?? editingTaskId ?? crypto.randomUUID(),
+        title: currentDraft.title.trim(),
+        description: currentDraft.description.trim(),
+        type: currentDraft.type,
+        priority: currentDraft.priority,
+        duration,
+        min_duration: normalizedMinDuration,
+        max_duration: normalizedMaxDuration,
+        hour_preset: preset.name,
+        hours_start: presetBounds.start_minutes,
+        hours_end: presetBounds.end_minutes,
+        hours_ranges: presetRanges,
+        earliest_start_at: resolvedEarliestStartAt,
+        schedule_after: scheduleAfter,
+        due_at: dueAt,
+        deadline: dueAt ? datetimeToDateKey(dueAt) : undefined,
+        scheduled_date: existingTask?.scheduled_date ?? scheduleAfter,
+        start_minutes: existingTask?.start_minutes ?? Math.max(scheduleAfterMinutes, presetBounds.start_minutes),
+        done: existingTask?.done ?? false,
+      } satisfies TaskItem,
+      resolvedEarliestStartAt,
+      dueAt,
+    };
+  };
+
+  const resolveDraftPlacement = (currentDraft: TaskDraft, existingTask: TaskItem | null) => {
+    const base = buildDraftTaskItem(currentDraft, existingTask);
+    if ('error' in base) {
+      return base;
+    }
+
+    const previewTasks = existingTask
+      ? tasks.map((task) => (task.id === existingTask.id ? base.item : task))
+      : [...tasks, base.item];
+    return resolveScheduledItemPlacement(base.item, previewTasks);
+  };
+
+  const resolveWorkflowStages = (currentDraft: TaskDraft, parentId: string, existingTask: TaskItem | null) => {
+    const workflowStartAt = currentDraft.scheduleAfterMode === 'now'
+      ? roundNowToFiveMinutesDt()
+      : (normalizeDatetimeValue(currentDraft.scheduleAfter, 9, 0) || dateKeyToDatetime(selectedDate, 9, 0));
+    const workflowDueAt = normalizeDatetimeValue(currentDraft.deadline, 18, 0) || undefined;
+    const stagesForScheduling = resolveWorkflowStageDurations(
+      currentDraft.workflowStages,
+      currentDraft.workflowAllocationMode,
+      workflowStartAt,
+      workflowDueAt,
+    );
+    const existingChildren = existingTask ? tasks.filter((task) => task.workflow_parent_id === existingTask.id) : [];
+    let scheduledTasks = existingTask
+      ? tasks.filter((task) => task.id !== existingTask.id && task.workflow_parent_id !== existingTask.id)
+      : [...tasks];
+    let nextEarliestStartAt = workflowStartAt;
+    let blocked = false;
+
+    const stageTasks: TaskItem[] = [];
+    const stagedItems: StagedWorkflowItem[] = stagesForScheduling.map((stage) => {
+      if (!stage.enabled) {
+        return { ...stage, startDt: '', endDt: '', afterDeadline: false };
+      }
+
+      if (blocked) {
+        return {
+          ...stage,
+          startDt: '',
+          endDt: '',
+          afterDeadline: false,
+          unscheduledReason: 'Blocked by an earlier stage that could not be placed.',
+        };
+      }
+
+      const existingChild = existingChildren.find((child) => child.workflow_stage_id === stage.id);
+      const stagePreset =
+        hourPresets.find((preset) => preset.id === stage.hourPresetId) ??
+        hourPresets.find((preset) => preset.kind === 'working') ??
+        selectedPreset;
+      const stageRanges = normalizeRanges(stagePreset.ranges);
+      const stageBounds = rangeBounds(stageRanges);
+      const stageDuration = Math.max(stage.minutes, DURATION_STEP);
+      const stageMinDuration = Math.max(Math.round(stageDuration / 4), DURATION_STEP);
+      const stageDateKey = datetimeToDateKey(nextEarliestStartAt);
+      const stageStartMinutes = datetimeToStartMinutes(nextEarliestStartAt);
+      const baseStageItem: TaskItem = {
+        id: existingChild?.id ?? crypto.randomUUID(),
+        title: `${currentDraft.title.trim()} — ${stage.name}`,
+        description: `Workflow stage of "${currentDraft.title.trim()}"`,
+        type: 'task',
+        priority: currentDraft.priority,
+        duration: stageDuration,
+        min_duration: Math.min(stageMinDuration, stageDuration),
+        max_duration: stageDuration,
+        hour_preset: stagePreset.name,
+        hours_start: stageBounds.start_minutes,
+        hours_end: stageBounds.end_minutes,
+        hours_ranges: stageRanges,
+        earliest_start_at: nextEarliestStartAt,
+        schedule_after: stageDateKey,
+        due_at: workflowDueAt,
+        deadline: workflowDueAt ? datetimeToDateKey(workflowDueAt) : undefined,
+        scheduled_date: existingChild?.scheduled_date ?? stageDateKey,
+        start_minutes: existingChild?.start_minutes ?? Math.max(stageStartMinutes, stageBounds.start_minutes),
+        done: existingChild?.done ?? false,
+        workflow_parent_id: parentId,
+        workflow_stage_id: stage.id,
+      };
+      const resolvedStage = resolveScheduledItemPlacement(baseStageItem, [...scheduledTasks, baseStageItem]);
+      if ('error' in resolvedStage) {
+        blocked = true;
+        return {
+          ...stage,
+          startDt: '',
+          endDt: '',
+          afterDeadline: false,
+          unscheduledReason: resolvedStage.error,
+        };
+      }
+
+      scheduledTasks = [...scheduledTasks, resolvedStage.item];
+      stageTasks.push(resolvedStage.item);
+      nextEarliestStartAt = resolvedStage.endDt;
+
+      return {
+        ...stage,
+        startDt: resolvedStage.startDt,
+        endDt: resolvedStage.endDt,
+        afterDeadline: resolvedStage.placement.afterDeadline,
+      };
+    });
+
+    return {
+      workflowStartAt,
+      workflowDueAt,
+      configuredStages: stagesForScheduling,
+      stagedItems,
+      stageTasks,
+    };
+  };
+
   // Real-time scheduling preview hint shown in the create/edit modal
   const draftSchedulingHint = useMemo(() => {
     if (!showTaskModal || draft.workflowEnabled) return null;
-    const resolvedDt = draft.scheduleAfterMode === 'now'
-      ? (() => { const n = new Date(); n.setMinutes(Math.floor(n.getMinutes() / 5) * 5, 0, 0); return toDtKey(n); })()
-      : (draft.scheduleAfter || selectedDate);
-    const scheduleAfterKey = datetimeToDateKey(resolvedDt);
-    const scheduleAfterMins = datetimeToStartMinutes(resolvedDt);
-    const deadlineKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
-    const preset = hourPresets.find((e) => e.id === draft.hourPresetId) ?? selectedPreset;
-    const presetRanges = normalizeRanges(preset.ranges);
-    const presetBounds = rangeBounds(presetRanges);
-    if (presetRanges.length === 0) return null;
-    const duration = clampDuration(draft.duration);
-    const placementContext = {
-      type: draft.type,
-      duration,
-      deadline: deadlineKey || undefined,
-      schedule_after: scheduleAfterKey,
-      hours_ranges: presetRanges,
-      hours_start: presetBounds.start_minutes,
-      hours_end: presetBounds.end_minutes,
-    };
-    const preferredStart = Math.max(scheduleAfterMins, presetBounds.start_minutes);
-    const placement = findPlacement(tasks, placementContext, scheduleAfterKey, preferredStart, bufferSettings, editingTaskId ?? undefined);
-    if (!placement) return { text: 'No open slot found — try adjusting hours or deadline.', warn: true };
+    const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) ?? null : null;
+    const resolved = resolveDraftPlacement(draft, existingTask);
+    if ('error' in resolved) return { text: resolved.error === 'Selected hours need at least one valid time range.' ? resolved.error : 'No open slot found — try adjusting hours or deadline.', warn: true };
+    const placement = resolved.placement;
     const tomorrowKey = addDays(todayKey, 1);
     const dateLabel = placement.scheduled_date === todayKey
       ? 'today'
@@ -938,21 +1191,46 @@ export default function App() {
         ? 'tomorrow'
         : formatDate(placement.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' });
     const timeLabel = formatDisplayTime(placement.start_minutes);
-    const pastDeadline = Boolean(deadlineKey && placement.scheduled_date > deadlineKey);
-    if (pastDeadline) return { text: `Best slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
+    if (placement.afterDeadline) return { text: `Best slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
     return { text: `Best time: ${dateLabel} at ${timeLabel}`, warn: false };
-  }, [showTaskModal, draft.scheduleAfterMode, draft.scheduleAfter, draft.duration, draft.hourPresetId, draft.type, draft.deadline, draft.workflowEnabled, tasks, bufferSettings, editingTaskId, selectedDate, todayKey, hourPresets, selectedPreset]);
+  }, [showTaskModal, draft, tasks, bufferSettings, editingTaskId, selectedDate, todayKey, hourPresets, planningStart, planningEnd, nowMinutes]);
 
   const calculatedStages = (() => {
     if (!draft.workflowEnabled) return [] as StagedWorkflowItem[];
-    const previewStartDt = draft.scheduleAfterMode === 'now' ? toDtKey(new Date()) : draft.scheduleAfter;
-    if (!previewStartDt) return [] as StagedWorkflowItem[];
-    const totalMinutes = draft.deadline ? minutesBetweenDt(previewStartDt, draft.deadline) : 0;
-    const distributed = totalMinutes > 0
-      ? autoDistributeStages(draft.workflowStages, totalMinutes)
-      : draft.workflowStages;
-    return calculateStageTimeline(distributed, previewStartDt);
+    const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) ?? null : null;
+    return resolveWorkflowStages(draft, editingTaskId ?? 'workflow-preview', existingTask).stagedItems;
   })();
+
+  const setWorkflowAllocationMode = (mode: WorkflowAllocationMode) => {
+    setDraft((prev) => {
+      if (prev.workflowAllocationMode === mode) {
+        return prev;
+      }
+
+      if (mode === 'manual') {
+        const workflowStartAt = prev.scheduleAfterMode === 'now'
+          ? roundNowToFiveMinutesDt()
+          : (normalizeDatetimeValue(prev.scheduleAfter, 9, 0) || dateKeyToDatetime(selectedDate, 9, 0));
+        const workflowDueAt = normalizeDatetimeValue(prev.deadline, 18, 0) || undefined;
+        const distributedStages = resolveWorkflowStageDurations(
+          prev.workflowStages,
+          prev.workflowAllocationMode,
+          workflowStartAt,
+          workflowDueAt,
+        );
+        return {
+          ...prev,
+          workflowAllocationMode: mode,
+          workflowStages: distributedStages.map((stage) => ({ ...stage })),
+        };
+      }
+
+      return {
+        ...prev,
+        workflowAllocationMode: mode,
+      };
+    });
+  };
 
   const focusDate = (dateKey: string) => {
     setSelectedDate(dateKey);
@@ -1194,22 +1472,6 @@ export default function App() {
       return;
     }
 
-    const duration = clampDuration(draft.duration);
-    const normalizedMinDuration = draft.flexible ? Math.min(clampDuration(Math.min(draft.minDuration, draft.maxDuration)), duration) : undefined;
-    const normalizedMaxDuration = draft.flexible
-      ? Math.min(Math.max(clampDuration(Math.max(draft.minDuration, draft.maxDuration)), normalizedMinDuration ?? DURATION_STEP), duration)
-      : undefined;
-    // Resolve "now" mode: round current time down to nearest 5-minute mark
-    const resolvedScheduleAfterDt = draft.scheduleAfterMode === 'now' ? (() => {
-      const n = new Date();
-      n.setMinutes(Math.floor(n.getMinutes() / 5) * 5, 0, 0);
-      return toDtKey(n);
-    })() : (draft.scheduleAfter || selectedDate);
-    // Strip time component — scheduler works with YYYY-MM-DD date keys
-    const scheduleAfter = datetimeToDateKey(resolvedScheduleAfterDt);
-    // Time-of-day in minutes to use as the earliest start for the scheduler on the first day
-    const scheduleAfterMinutes = datetimeToStartMinutes(resolvedScheduleAfterDt);
-    const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : '';
     const preset = hourPresets.find((entry) => entry.id === draft.hourPresetId) ?? selectedPreset;
     const presetRanges = normalizeRanges(preset.ranges);
     const presetBounds = rangeBounds(presetRanges);
@@ -1228,24 +1490,24 @@ export default function App() {
         setStatusMessage('Enable at least one workflow stage.');
         return;
       }
-      // Use the same auto-distributed timeline shown in the UI
-      const totalMinutes = draft.deadline ? minutesBetweenDt(resolvedScheduleAfterDt, draft.deadline) : 0;
-      const distributedStages = totalMinutes > 0
-        ? autoDistributeStages(draft.workflowStages, totalMinutes)
-        : draft.workflowStages;
-      const stages = calculateStageTimeline(distributedStages, resolvedScheduleAfterDt);
-      const firstEnabled = stages.find((s) => s.enabled);
+      const parentId = editingTaskId ?? crypto.randomUUID();
+      const resolvedWorkflow = resolveWorkflowStages(draft, parentId, existingTask);
+      const firstEnabled = resolvedWorkflow.stagedItems.find((stage) => stage.enabled && stage.startDt);
       if (!firstEnabled?.startDt) {
-        setStatusMessage('Could not calculate stage timelines — check Schedule after date.');
+        const firstUnscheduled = resolvedWorkflow.stagedItems.find((stage) => stage.enabled && stage.unscheduledReason);
+        setStatusMessage(firstUnscheduled?.unscheduledReason ?? 'Could not calculate workflow stage placements.');
         return;
       }
 
-      const parentId = editingTaskId ?? crypto.randomUUID();
-      const wfConfig: WorkflowConfig = { stages: draft.workflowStages };
+      const workflowDueAt = resolvedWorkflow.workflowDueAt;
+      const wfConfig: WorkflowConfig = {
+        stages: resolvedWorkflow.configuredStages,
+        allocation_mode: draft.workflowAllocationMode,
+      };
 
       const parentDateKey = datetimeToDateKey(firstEnabled.startDt);
       const parentStartMinutes = datetimeToStartMinutes(firstEnabled.startDt);
-      const deadlineDateKey = draft.deadline ? datetimeToDateKey(draft.deadline) : undefined;
+      const deadlineDateKey = workflowDueAt ? datetimeToDateKey(workflowDueAt) : undefined;
 
       const parentItem: TaskItem = {
         id: parentId,
@@ -1258,56 +1520,19 @@ export default function App() {
         hours_start: presetBounds.start_minutes,
         hours_end: presetBounds.end_minutes,
         hours_ranges: presetRanges,
-        schedule_after: parentDateKey,
+        earliest_start_at: resolvedWorkflow.workflowStartAt,
+        schedule_after: datetimeToDateKey(resolvedWorkflow.workflowStartAt),
+        due_at: workflowDueAt,
         deadline: deadlineDateKey,
         scheduled_date: parentDateKey,
         start_minutes: parentStartMinutes,
         done: existingTask?.done ?? false,
         workflow_config: wfConfig,
       };
-
-      const existingChildren = editingTaskId ? tasks.filter((t) => t.workflow_parent_id === editingTaskId) : [];
-
-      // Only build task items for enabled stages (use the fully-calculated timeline)
-      const stageTasks: TaskItem[] = stages
-        .filter((s) => s.enabled)
-        .map((stage) => {
-          const existing = existingChildren.find((c) => c.workflow_stage_id === stage.id);
-          // Resolve this stage's hour preset
-          const stagePreset =
-            hourPresets.find((p) => p.id === stage.hourPresetId) ??
-            hourPresets.find((p) => p.kind === 'working') ??
-            selectedPreset;
-          const stageRanges = normalizeRanges(stagePreset.ranges);
-          const stageBounds = rangeBounds(stageRanges);
-          // stage.minutes is the allocated time; use it directly as duration
-          const stageDuration = Math.max(stage.minutes, DURATION_STEP);
-          const stageMinDuration = Math.max(Math.round(stageDuration / 4), DURATION_STEP);
-          const stageDateKey = datetimeToDateKey(stage.startDt);
-          const stageStartMinutes = datetimeToStartMinutes(stage.startDt);
-          const stageDeadlineKey = datetimeToDateKey(stage.endDt);
-          return {
-            id: existing?.id ?? crypto.randomUUID(),
-            title: `${draft.title.trim()} — ${stage.name}`,
-            description: `Workflow stage of "${draft.title.trim()}"`,
-            type: 'task' as TaskType,
-            priority: draft.priority,
-            duration: stageDuration,
-            min_duration: Math.min(stageMinDuration, stageDuration),
-            max_duration: stageDuration,
-            hour_preset: stagePreset.name,
-            hours_start: stageBounds.start_minutes,
-            hours_end: stageBounds.end_minutes,
-            hours_ranges: stageRanges,
-            schedule_after: stageDateKey,
-            deadline: stageDeadlineKey,
-            scheduled_date: stageDateKey,
-            start_minutes: stageStartMinutes,
-            done: existing?.done ?? false,
-            workflow_parent_id: parentId,
-            workflow_stage_id: stage.id,
-          };
-        });
+      const stageTasks = resolvedWorkflow.stageTasks.map((stageTask) => ({
+        ...stageTask,
+        workflow_parent_id: parentId,
+      }));
 
       const previousTasks = tasks;
       setTasks((prev) => {
@@ -1339,7 +1564,9 @@ export default function App() {
             hours_start: parentItem.hours_start,
             hours_end: parentItem.hours_end,
             hours_ranges: parentItem.hours_ranges,
+            earliest_start_at: parentItem.earliest_start_at,
             schedule_after: parentItem.schedule_after,
+            due_at: parentItem.due_at,
             deadline: parentItem.deadline,
             scheduled_date: parentItem.scheduled_date,
             start_minutes: parentItem.start_minutes,
@@ -1369,77 +1596,12 @@ export default function App() {
     }
 
     // ── NORMAL PATH ───────────────────────────────────────────────────────────
-    const placementContext = {
-      type: draft.type,
-      duration,
-      deadline: deadlineDateKey || undefined,
-      schedule_after: scheduleAfter,
-      hours_ranges: presetRanges,
-      hours_start: presetBounds.start_minutes,
-      hours_end: presetBounds.end_minutes,
-    };
-
-    // For new tasks: start search from the schedule-after date+time so the
-    // first candidate slot is at or after "now" (or the custom datetime).
-    // For edits: keep the existing placement as the preferred anchor.
-    const placementPreferredDate = existingTask ? existingTask.scheduled_date : scheduleAfter;
-    const placementPreferredStart = existingTask
-      ? existingTask.start_minutes
-      : Math.max(scheduleAfterMinutes, presetBounds.start_minutes);
-
-    let placement = findPlacement(
-      tasks,
-      placementContext,
-      placementPreferredDate,
-      placementPreferredStart,
-      bufferSettings,
-      editingTaskId ?? undefined,
-    );
-
-    const item: TaskItem = {
-      id: editingTaskId ?? crypto.randomUUID(),
-      title: draft.title.trim(),
-      description: draft.description.trim(),
-      type: draft.type,
-      priority: draft.priority,
-      duration,
-      min_duration: normalizedMinDuration,
-      max_duration: normalizedMaxDuration,
-      hour_preset: preset.name,
-      hours_start: presetBounds.start_minutes,
-      hours_end: presetBounds.end_minutes,
-      hours_ranges: presetRanges,
-      schedule_after: scheduleAfter,
-      deadline: deadlineDateKey || undefined,
-      scheduled_date: placement?.scheduled_date ?? (existingTask?.scheduled_date ?? scheduleAfter),
-      start_minutes: placement?.start_minutes ?? (existingTask?.start_minutes ?? presetBounds.start_minutes),
-      done: existingTask?.done ?? false,
-    };
-
-    if (item.type === 'task' || item.type === 'focus' || isFlexibleTask(item)) {
-      const previewTasks = editingTaskId ? tasks.map((task) => (task.id === editingTaskId ? item : task)) : [...tasks, item];
-      const previewStartSeeds = [planningStart, item.schedule_after ?? item.scheduled_date];
-      const previewStart = previewStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
-      const previewEndSeed = item.deadline ?? item.scheduled_date;
-      const previewEnd = addDays(previewEndSeed > planningEnd ? previewEndSeed : planningEnd, 14);
-      const previewBlocks = buildScheduleBlocks(previewTasks, previewStart, previewEnd, bufferSettings, todayKey, nowMinutes).filter((block) => block.task_id === item.id);
-
-      if (previewBlocks.length === 0) {
-        setStatusMessage('No conflict-free schedule was found for the selected hours and deadline window.');
-        return;
-      }
-
-      placement = {
-        scheduled_date: previewBlocks[0].scheduled_date,
-        start_minutes: previewBlocks[0].start_minutes,
-        afterDeadline: Boolean(item.deadline && previewBlocks[previewBlocks.length - 1].scheduled_date > item.deadline),
-      };
-      item.scheduled_date = placement.scheduled_date;
-      item.start_minutes = placement.start_minutes;
-    } else if (!placement) {
-      setStatusMessage('No open slot was found for the selected hours and schedule-after date.');
+    const resolved = resolveDraftPlacement(draft, existingTask);
+    if ('error' in resolved) {
+      setStatusMessage(resolved.error);
       return;
     }
+    const { item, placement } = resolved;
 
     const previousTasks = tasks;
     setTasks((prev) =>
@@ -1477,7 +1639,9 @@ export default function App() {
           hours_start: item.hours_start,
           hours_end: item.hours_end,
           hours_ranges: item.hours_ranges,
+          earliest_start_at: item.earliest_start_at,
           schedule_after: item.schedule_after,
+          due_at: item.due_at,
           deadline: item.deadline,
           scheduled_date: item.scheduled_date,
           start_minutes: item.start_minutes,
@@ -1675,15 +1839,17 @@ export default function App() {
 
     const previousTasks = tasks;
     const desiredStart = clampStart(startMinutes, task.duration);
-    const collision = findConflict(tasks, dateKey, desiredStart, task.duration, task.id);
+    const collision = findConflict(schedulableTasks, dateKey, desiredStart, task.duration, task.id);
     const outsideWindow = Boolean(task.schedule_after && dateKey < task.schedule_after) || !isWithinTaskWindows(task, desiredStart, task.duration);
     const placement = collision || outsideWindow
       ? findPlacement(
-          tasks,
+          activeSchedulableTasks,
           {
             type: task.type,
             duration: task.duration,
+            due_at: task.due_at,
             deadline: task.deadline,
+            earliest_start_at: task.earliest_start_at,
             schedule_after: task.schedule_after,
             hours_ranges: task.hours_ranges,
             hours_start: task.hours_start,
@@ -1760,7 +1926,7 @@ export default function App() {
     const rawMinutes = (clientY - bounds.top + board.scrollTop - BOARD_TOP_PADDING) / PIXELS_PER_MINUTE + boardWindow.start;
     const startMinutes = clampStart(rawMinutes, task.duration);
     const date = weekDates[dayIndex];
-    const conflict = findConflict(tasks, date, startMinutes, task.duration, task.id);
+    const conflict = findConflict(schedulableTasks, date, startMinutes, task.duration, task.id);
     const inWindow = isWithinTaskWindows(task, startMinutes, task.duration);
     updateDropPreview({ date, startMinutes, valid: !conflict && inWindow, duration: task.duration, dayIndex });
   };
@@ -2643,6 +2809,22 @@ export default function App() {
                         <p className="workflow-notice">Set an earliest start date above to calculate timelines.</p>
                       ) : (
                         <div className="workflow-stages">
+                          <div className="seg-control">
+                            <button
+                              type="button"
+                              className={draft.workflowAllocationMode === 'auto' ? 'active' : ''}
+                              onClick={() => setWorkflowAllocationMode('auto')}
+                            >
+                              Auto
+                            </button>
+                            <button
+                              type="button"
+                              className={draft.workflowAllocationMode === 'manual' ? 'active' : ''}
+                              onClick={() => setWorkflowAllocationMode('manual')}
+                            >
+                              Manual
+                            </button>
+                          </div>
                           <div className="workflow-stages-header">
                             <span /><span>Stage</span><span>Duration</span><span>Hours</span><span>Timeline</span>
                           </div>
@@ -2653,25 +2835,48 @@ export default function App() {
                               </label>
                               <span className="stage-name"><span className="stage-num">{index + 1}</span>{stage.name}</span>
                               <div className="stage-days-control">
-                                <button type="button" className="stage-days-btn" disabled={!stage.enabled} onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: Math.max(15, s.minutes - 15) } : s) }))}>−</button>
+                                <button
+                                  type="button"
+                                  className="stage-days-btn"
+                                  disabled={!stage.enabled || draft.workflowAllocationMode === 'auto'}
+                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: Math.max(15, s.minutes - 15) } : s) }))}
+                                >
+                                  −
+                                </button>
                                 <span className="stage-days-val">{formatDuration(stage.minutes)}</span>
-                                <button type="button" className="stage-days-btn" disabled={!stage.enabled} onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: s.minutes + 15 } : s) }))}>+</button>
+                                <button
+                                  type="button"
+                                  className="stage-days-btn"
+                                  disabled={!stage.enabled || draft.workflowAllocationMode === 'auto'}
+                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: s.minutes + 15 } : s) }))}
+                                >
+                                  +
+                                </button>
                               </div>
                               <select className="stage-hours-select" value={stage.hourPresetId} disabled={!stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, hourPresetId: event.target.value } : s) }))}>
                                 {hourPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
-                              <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>{stage.enabled && stage.startDt ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}` : '—'}</span>
+                              <span className={`stage-dates ${stage.enabled ? '' : 'muted'}`}>
+                                {stage.enabled && stage.startDt
+                                  ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}${stage.afterDeadline ? ' ⚠' : ''}`
+                                  : stage.unscheduledReason ?? '—'}
+                              </span>
                             </div>
                           ))}
                           {(() => {
                             const enabled = calculatedStages.filter((s) => s.enabled);
                             const last = enabled[enabled.length - 1];
                             const total = enabled.reduce((sum, s) => sum + s.minutes, 0);
+                            const unresolved = enabled.filter((stage) => !stage.startDt).length;
                             const over = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
                             return (
                               <div className={`workflow-total ${over ? 'over-deadline' : ''}`}>
                                 <span>{enabled.length} stages · {formatDuration(total)} total{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
-                                {last?.endDt ? <span>Est. done: {formatDt(last.endDt)}{over ? ' ⚠ past due' : ''}</span> : null}
+                                {unresolved > 0
+                                  ? <span>{unresolved} stage{unresolved > 1 ? 's' : ''} could not be placed</span>
+                                  : last?.endDt
+                                    ? <span>Est. done: {formatDt(last.endDt)}{over ? ' ⚠ past due' : ''}</span>
+                                    : null}
                               </div>
                             );
                           })()}

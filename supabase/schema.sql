@@ -13,7 +13,9 @@ create table if not exists public.schedule_items (
   hours_start integer check (hours_start is null or (hours_start >= 0 and hours_start < 1440)),
   hours_end integer check (hours_end is null or (hours_end > 0 and hours_end <= 1440)),
   hours_ranges jsonb,
+  earliest_start_at timestamp without time zone,
   schedule_after date,
+  due_at timestamp without time zone,
   deadline date,
   scheduled_date date not null,
   start_minutes integer not null check (start_minutes >= 0 and start_minutes < 1440),
@@ -34,7 +36,15 @@ alter table public.schedule_items add column if not exists hour_preset text;
 alter table public.schedule_items add column if not exists hours_start integer;
 alter table public.schedule_items add column if not exists hours_end integer;
 alter table public.schedule_items add column if not exists hours_ranges jsonb;
+alter table public.schedule_items add column if not exists earliest_start_at timestamp without time zone;
 alter table public.schedule_items add column if not exists schedule_after date;
+alter table public.schedule_items add column if not exists due_at timestamp without time zone;
+
+update public.schedule_items
+set
+  earliest_start_at = coalesce(earliest_start_at, schedule_after::timestamp + interval '9 hours'),
+  due_at = coalesce(due_at, deadline::timestamp + interval '18 hours')
+where earliest_start_at is null or due_at is null;
 
 do $$
 begin
