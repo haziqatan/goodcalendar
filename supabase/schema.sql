@@ -39,6 +39,7 @@ alter table public.schedule_items add column if not exists hours_ranges jsonb;
 alter table public.schedule_items add column if not exists earliest_start_at timestamp without time zone;
 alter table public.schedule_items add column if not exists schedule_after date;
 alter table public.schedule_items add column if not exists due_at timestamp without time zone;
+alter table public.schedule_items add column if not exists is_pinned boolean not null default false;
 
 update public.schedule_items
 set

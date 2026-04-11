@@ -1078,6 +1078,7 @@ export default function App() {
         scheduled_date: existingTask?.scheduled_date ?? scheduleAfter,
         start_minutes: existingTask?.start_minutes ?? Math.max(scheduleAfterMinutes, presetBounds.start_minutes),
         done: existingTask?.done ?? false,
+        is_pinned: false, // modal save re-enables auto-scheduling
       } satisfies TaskItem,
       resolvedEarliestStartAt,
       dueAt,
@@ -1670,6 +1671,7 @@ export default function App() {
           deadline: item.deadline,
           scheduled_date: item.scheduled_date,
           start_minutes: item.start_minutes,
+          is_pinned: false,
         })
         .eq('id', item.id);
       if (error) {
@@ -1867,7 +1869,7 @@ export default function App() {
     setTasks(sortTasksChronologically(
       tasks.map((entry) =>
         entry.id === taskId
-          ? { ...entry, scheduled_date: dateKey, start_minutes: startMinutes }
+          ? { ...entry, scheduled_date: dateKey, start_minutes: startMinutes, is_pinned: true }
           : entry,
       ),
     ));
@@ -1878,7 +1880,7 @@ export default function App() {
         : `${task.title} moved to ${formatDisplayTime(startMinutes)}${afterDeadline ? ' — past due date.' : '.'}`,
     );
 
-    await persistTaskUpdate(taskId, { scheduled_date: dateKey, start_minutes: startMinutes }, previousTasks);
+    await persistTaskUpdate(taskId, { scheduled_date: dateKey, start_minutes: startMinutes, is_pinned: true }, previousTasks);
   };
 
   // ── Pointer-based drag for calendar task cards ───────────────────────────────

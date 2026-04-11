@@ -632,12 +632,25 @@ export function buildScheduleBlocks(
   const blocksByDate = new Map<string, ScheduleBlock[]>();
   const doneTasks = schedulableTasks.filter((task) => task.done);
   const activeTasks = schedulableTasks.filter((task) => !task.done);
-  const habitTasks = sortTasksChronologically(activeTasks.filter((task) => task.type === 'buffer')).sort(compareHabitPreference);
-  const taskItems = sortTasksChronologically(activeTasks.filter((task) => task.type === 'task')).sort(compareTaskImportance);
-  const focusItems = sortTasksChronologically(activeTasks.filter((task) => task.type === 'focus')).sort(compareFocusFlexibility);
+
+  // Manually-pinned tasks: placed first at their exact stored position.
+  // They occupy their slot in blocksByDate so auto-placed tasks avoid them.
+  const pinnedTasks = activeTasks.filter((task) => task.is_pinned);
+  const autoTasks = activeTasks.filter((task) => !task.is_pinned);
+
+  const habitTasks = sortTasksChronologically(autoTasks.filter((task) => task.type === 'buffer')).sort(compareHabitPreference);
+  const taskItems = sortTasksChronologically(autoTasks.filter((task) => task.type === 'task')).sort(compareTaskImportance);
+  const focusItems = sortTasksChronologically(autoTasks.filter((task) => task.type === 'focus')).sort(compareFocusFlexibility);
 
   // Done tasks are shown in the UI but do NOT occupy slots for scheduling.
   const optimizedBlocks: ScheduleBlock[] = doneTasks.map(toBlock);
+
+  // Place pinned tasks first — they render at their exact stored position.
+  pinnedTasks.forEach((task) => {
+    const block = toBlock(task);
+    pushBlock(blocksByDate, block);
+    optimizedBlocks.push(block);
+  });
 
   habitTasks.forEach((task) => {
     const placement =

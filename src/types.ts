@@ -49,6 +49,7 @@ export interface TaskItem {
   scheduled_date: string;
   start_minutes: number;
   done: boolean;
+  is_pinned?: boolean;
   workflow_config?: WorkflowConfig;
   workflow_parent_id?: string;
   workflow_stage_id?: string;
