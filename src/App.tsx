@@ -1374,23 +1374,32 @@ export default function App() {
       setDrawPreview({ startMinutes: lo, endMinutes: hi, dayIndex: drawStateRef.current.dayIndex });
     };
 
-    const onUpFinal = () => {
+    const cancelDraw = () => {
       stopAutoScroll();
       el.removeEventListener('pointermove', onMoveCapture);
       el.removeEventListener('pointerup', onUpFinal);
-
-      const s = drawStateRef.current;
+      el.removeEventListener('pointercancel', onCancelDraw);
+      document.removeEventListener('keydown', onKeyDraw);
       drawStateRef.current = null;
       setDrawPreview(null);
+    };
 
+    const onUpFinal = () => {
+      const s = drawStateRef.current;
+      cancelDraw();
       if (!s) return;
       const { startMinutes: lo, endMinutes: hi } = finalPreviewRef.current;
       const duration = Math.max(hi - lo, DURATION_STEP);
       openTaskModalWithTime(s.date, lo, duration);
     };
 
+    const onCancelDraw = () => cancelDraw();
+    const onKeyDraw = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelDraw(); };
+
     el.addEventListener('pointermove', onMoveCapture);
     el.addEventListener('pointerup', onUpFinal);
+    el.addEventListener('pointercancel', onCancelDraw);
+    document.addEventListener('keydown', onKeyDraw);
   };
 
   const closeTaskModal = () => {
@@ -1828,10 +1837,12 @@ export default function App() {
       setZone(findZone(e.clientX, e.clientY));
     };
 
-    const cleanup = () => {
+    const cleanup = (commit: boolean) => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onCancel);
       document.removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (ghost) { ghost.remove(); ghost = null; }
       if (activeZone) { activeZone.classList.remove('dnd-active'); activeZone = null; }
       if (clone) {
@@ -1843,19 +1854,23 @@ export default function App() {
       }
       setDraggingPriorityTaskId(null);
       setHoveredPriorityBucket(null);
+      return commit;
     };
 
     const onUp = async () => {
       const dropBucket = activeZone?.getAttribute('data-bucket') as PriorityBucket | undefined;
-      cleanup();
-      if (dragging && dropBucket) await updateTaskPriority(task.id, dropBucket);
+      if (cleanup(true) && dragging && dropBucket) await updateTaskPriority(task.id, dropBucket);
     };
 
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cleanup(); };
+    const onCancel = () => cleanup(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cleanup(false); };
+    const onVisibility = () => { if (document.hidden) cleanup(false); };
 
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onCancel);
     document.addEventListener('keydown', onKey);
+    document.addEventListener('visibilitychange', onVisibility);
   };
 
   // Pure commit — placement is already resolved by computeDropPreview.
@@ -2423,10 +2438,26 @@ export default function App() {
                       const sourceTask = tasks.find((entry) => entry.id === task.task_id);
                       const draggable = sourceTask ? !isFlexibleTask(sourceTask) : !task.is_split_segment;
                       const isDragging = draggingTaskId === task.task_id;
+
+                      // Urgency: compare block end time against due_at / deadline
+                      const blockEndMs = new Date(task.scheduled_date + 'T00:00:00').getTime() + (task.start_minutes + task.duration) * 60_000;
+                      const dueAtMs = sourceTask?.due_at ? new Date(sourceTask.due_at).getTime() : null;
+                      const deadlineMs = task.deadline ? new Date(task.deadline + 'T23:59:59').getTime() : null;
+                      const effectiveDueMs = dueAtMs ?? deadlineMs;
+                      const nowMs = Date.now();
+                      let urgency = '';
+                      if (effectiveDueMs !== null) {
+                        if (blockEndMs > effectiveDueMs || effectiveDueMs < nowMs) {
+                          urgency = 'overdue';
+                        } else if (effectiveDueMs - nowMs < 24 * 60 * 60 * 1000) {
+                          urgency = 'near-deadline';
+                        }
+                      }
+
                       return (
                         <article
                           key={task.id}
-                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.duration <= 30 ? 'compact' : ''} ${isDragging ? 'dragging' : ''}`}
+                          className={`week-task type-${task.type} priority-${taskBucket(task, todayKey)} ${task.duration <= 30 ? 'compact' : ''} ${isDragging ? 'dragging' : ''}${urgency ? ` urgency-${urgency}` : ''}`}
                           style={{
                             top: `${BOARD_TOP_PADDING + (task.start_minutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                             left: `calc(${TIME_GUTTER}px + ${dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 6px)`,
