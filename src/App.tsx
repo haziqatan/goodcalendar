@@ -1203,7 +1203,12 @@ export default function App() {
     if (!showTaskModal || draft.workflowEnabled) return null;
     const existingTask = editingTaskId ? tasks.find((task) => task.id === editingTaskId) ?? null : null;
     const resolved = resolveDraftPlacement(draft, existingTask);
-    if ('error' in resolved) return { text: (resolved.error ?? '') === 'Selected hours need at least one valid time range.' ? (resolved.error ?? '') : 'No open slot found — try adjusting hours or deadline.', warn: true };
+    if ('error' in resolved) return {
+      text: (resolved.error ?? '') === 'Selected hours need at least one valid time range.'
+        ? (resolved.error ?? '')
+        : `No space before deadline — try extending hours or reducing duration`,
+      warn: true,
+    };
     if (!('placement' in resolved)) return null;
     const placement = (resolved as { placement: { scheduled_date: string; start_minutes: number; afterDeadline: boolean } }).placement;
     const tomorrowKey = addDays(todayKey, 1);
@@ -1214,7 +1219,11 @@ export default function App() {
         : formatDate(placement.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' });
     const timeLabel = formatDisplayTime(placement.start_minutes);
     if (placement.afterDeadline) return { text: `Best slot ${dateLabel} at ${timeLabel} — past due date`, warn: true };
-    return { text: `Best time: ${dateLabel} at ${timeLabel}`, warn: false };
+    // Tight-schedule: deadline within 24h of the placement time
+    const deadlineMs = draft.deadline ? new Date(draft.deadline).getTime() : null;
+    const placementMs = new Date(placement.scheduled_date + 'T00:00:00').getTime() + placement.start_minutes * 60_000;
+    const tight = deadlineMs !== null && deadlineMs - placementMs < 24 * 60 * 60 * 1000;
+    return { text: `Best time: ${dateLabel} at ${timeLabel}${tight ? ' · ⚠ Tight schedule' : ''}`, warn: tight };
   }, [showTaskModal, draft, tasks, bufferSettings, editingTaskId, selectedDate, todayKey, hourPresets, planningStart, planningEnd, nowMinutes]);
 
   const calculatedStages = (() => {
@@ -1787,7 +1796,7 @@ export default function App() {
         transform:scale(1.04) rotate(-0.6deg);
         box-shadow:0 14px 40px rgba(0,0,0,0.22),0 4px 12px rgba(0,0,0,0.12);
         opacity:0.96;border-radius:10px;will-change:left,top;
-        transition:transform 0.1s ease,box-shadow 0.1s ease;
+        transition:transform 0.1s ease,box-shadow 0.1s ease,left 30ms ease-out,top 30ms ease-out;
       `;
       document.body.appendChild(clone);
       setDraggingPriorityTaskId(task.id);
@@ -1993,7 +2002,7 @@ export default function App() {
           `left:${rect.left}px`, `top:${rect.top}px`,
           'opacity:0.88', 'transform:scale(1.04) rotate(-0.4deg)',
           'box-shadow:0 14px 44px rgba(0,0,0,0.22)',
-          'transition:transform 80ms ease,box-shadow 80ms ease',
+          'transition:transform 80ms ease,box-shadow 80ms ease,left 30ms ease-out,top 30ms ease-out',
           'border-radius:10px', 'will-change:left,top',
         ].join(';');
         document.body.appendChild(clone);
@@ -2386,14 +2395,17 @@ export default function App() {
                     {/* Drop indicator ghost */}
                     {dropPreview ? (
                       <div
-                        className={`drop-indicator ${dropPreview.valid ? 'valid' : 'invalid'}`}
+                        className={`drop-indicator ${dropPreview.valid ? 'valid' : 'invalid'}${dropPreview.snapped ? ' snapped' : ''}`}
                         style={{
                           top: `${BOARD_TOP_PADDING + (dropPreview.startMinutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                           left: `calc(${TIME_GUTTER}px + ${dropPreview.dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 4px)`,
                           width: `calc((100% - ${TIME_GUTTER}px) / 7 - 8px)`,
                           height: `${Math.max(dropPreview.duration * PIXELS_PER_MINUTE, 38)}px`,
                         }}
-                      />
+                      >
+                        {dropPreview.valid && dropPreview.snapped ? <span className="drop-indicator__label">Next available slot</span> : null}
+                        {!dropPreview.valid ? <span className="drop-indicator__label drop-indicator__label--invalid">No slot available</span> : null}
+                      </div>
                     ) : null}
 
                     {/* Drag-to-create preview */}
@@ -2454,6 +2466,14 @@ export default function App() {
                         }
                       }
 
+                      // Rich tooltip context
+                      const tooltipParts: string[] = [formatDisplayRange(task.start_minutes, task.duration)];
+                      if (sourceTask?.is_pinned) tooltipParts.push('Manually placed');
+                      if (urgency === 'overdue') tooltipParts.push('Past due');
+                      else if (urgency === 'near-deadline') tooltipParts.push('Due soon');
+                      if (task.deadline) tooltipParts.push(`Deadline ${formatDate(task.deadline, { month: 'short', day: 'numeric' })}`);
+                      if (task.is_split_segment && task.segment_count > 1) tooltipParts.push(`Part ${task.segment_index} of ${task.segment_count}`);
+
                       return (
                         <article
                           key={task.id}
@@ -2465,6 +2485,7 @@ export default function App() {
                             height: `${Math.max(task.duration * PIXELS_PER_MINUTE, 38)}px`,
                             cursor: draggable ? (isDragging ? 'grabbing' : 'grab') : 'default',
                           }}
+                          data-tooltip={tooltipParts.join(' · ')}
                           onPointerDown={(e) => handleTaskPointerDown(e, task.task_id, draggable)}
                         >
                           <strong>{task.title}{task.is_split_segment && task.segment_count > 1 ? ` • ${task.segment_index}/${task.segment_count}` : ''}</strong>
