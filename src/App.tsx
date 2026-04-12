@@ -3030,14 +3030,32 @@ export default function App() {
                             </button>
                           </div>
                           <div className="workflow-stages-header">
-                            <span /><span>Stage</span><span>Duration</span><span>Hours</span><span>Timeline</span>
+                            <span /><span>Stage</span><span>Duration</span><span>Est. days</span><span>Hours</span><span>Timeline</span><span />
                           </div>
-                          {calculatedStages.map((stage, index) => (
+                          {calculatedStages.map((stage, index) => {
+                            // Estimate working days: stage minutes ÷ daily available hours from preset
+                            const preset = hourPresets.find((p) => p.id === stage.hourPresetId);
+                            const dailyMinutes = preset
+                              ? preset.ranges.reduce((sum, r) => sum + ((r.end_minutes ?? 0) - (r.start_minutes ?? 0)), 0)
+                              : 480; // fallback 8h
+                            const estDays = dailyMinutes > 0 ? Math.ceil(stage.minutes / dailyMinutes) : 1;
+
+                            return (
                             <div key={stage.id} className={`workflow-stage-row ${stage.enabled ? '' : 'disabled'}`}>
                               <label className="stage-enable">
                                 <input type="checkbox" checked={stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, enabled: event.target.checked } : s) }))} />
                               </label>
-                              <span className="stage-name"><span className="stage-num">{index + 1}</span>{stage.name}</span>
+                              <div className="stage-name">
+                                <span className="stage-num">{index + 1}</span>
+                                <input
+                                  type="text"
+                                  className="stage-name-input"
+                                  value={stage.name}
+                                  disabled={!stage.enabled}
+                                  onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, name: event.target.value } : s) }))}
+                                  placeholder="Stage name"
+                                />
+                              </div>
                               <div className="stage-days-control">
                                 <button
                                   type="button"
@@ -3057,6 +3075,7 @@ export default function App() {
                                   +
                                 </button>
                               </div>
+                              <span className="stage-est-days">{stage.enabled ? `${estDays}d` : '—'}</span>
                               <select className="stage-hours-select" value={stage.hourPresetId} disabled={!stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, hourPresetId: event.target.value } : s) }))}>
                                 {hourPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
@@ -3065,17 +3084,55 @@ export default function App() {
                                   ? `${formatDt(stage.startDt)} → ${formatDt(stage.endDt)}${stage.afterDeadline ? ' ⚠' : ''}`
                                   : stage.unscheduledReason ?? '—'}
                               </span>
+                              <button
+                                type="button"
+                                className="stage-remove-btn"
+                                onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.filter((s) => s.id !== stage.id) }))}
+                                aria-label="Remove stage"
+                              >
+                                <X size={13} />
+                              </button>
                             </div>
-                          ))}
+                            );
+                          })}
+                          <button
+                            type="button"
+                            className="stage-add-btn"
+                            onClick={() => setDraft((prev) => ({
+                              ...prev,
+                              workflowStages: [
+                                ...prev.workflowStages,
+                                {
+                                  id: `custom-${crypto.randomUUID()}`,
+                                  name: '',
+                                  enabled: true,
+                                  weight: 1,
+                                  minutes: 60,
+                                  hourPresetId: hourPresets[0]?.id ?? 'working-hours',
+                                },
+                              ],
+                            }))}
+                          >
+                            <Plus size={13} /> Add stage
+                          </button>
                           {(() => {
                             const enabled = calculatedStages.filter((s) => s.enabled);
                             const last = enabled[enabled.length - 1];
                             const total = enabled.reduce((sum, s) => sum + s.minutes, 0);
+                            const totalDays = (() => {
+                              let days = 0;
+                              for (const s of enabled) {
+                                const p = hourPresets.find((pr) => pr.id === s.hourPresetId);
+                                const dm = p ? p.ranges.reduce((sum, r) => sum + ((r.end_minutes ?? 0) - (r.start_minutes ?? 0)), 0) : 480;
+                                days += dm > 0 ? Math.ceil(s.minutes / dm) : 1;
+                              }
+                              return days;
+                            })();
                             const unresolved = enabled.filter((stage) => !stage.startDt).length;
                             const over = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
                             return (
                               <div className={`workflow-total ${over ? 'over-deadline' : ''}`}>
-                                <span>{enabled.length} stages · {formatDuration(total)} total{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
+                                <span>{enabled.length} stages · {formatDuration(total)} total · ~{totalDays} working day{totalDays !== 1 ? 's' : ''}{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
                                 {unresolved > 0
                                   ? <span>{unresolved} stage{unresolved > 1 ? 's' : ''} could not be placed</span>
                                   : last?.endDt

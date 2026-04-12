@@ -2366,11 +2366,11 @@ button {
   scrollbar-color: var(--line) transparent;
 }
 
-/* 5 columns: enable | name | duration | hours | dates */
+/* 7 columns: enable | name | duration | est days | hours | dates | remove */
 .workflow-stages-header,
 .workflow-stage-row {
   display: grid;
-  grid-template-columns: 28px minmax(160px, 1fr) 86px 130px minmax(200px, 220px);
+  grid-template-columns: 28px minmax(140px, 1fr) 86px 52px 120px minmax(180px, 210px) 28px;
   gap: 6px;
   align-items: center;
   padding: 7px 14px;
@@ -2419,12 +2419,43 @@ button {
 .stage-name {
   font-size: 0.83rem;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.stage-name-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text);
+  padding: 3px 6px;
+  outline: none;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.stage-name-input:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+.stage-name-input:focus:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+
+.stage-name-input:disabled {
+  color: var(--muted);
+}
+
+.stage-name-input::placeholder {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .stage-num {
@@ -2511,6 +2542,62 @@ button {
 
 .stage-dates.muted {
   color: var(--muted);
+}
+
+/* Est. days column */
+.stage-est-days {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: center;
+}
+
+/* Remove stage button */
+.stage-remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.workflow-stage-row:hover .stage-remove-btn {
+  opacity: 1;
+}
+
+.stage-remove-btn:hover {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+/* Add stage button */
+.stage-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 14px;
+  padding: 5px 12px;
+  border: 1.5px dashed var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.stage-add-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
 }
 
 /* Summary footer */
