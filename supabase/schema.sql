@@ -117,3 +117,88 @@ create policy "public delete schedule items"
   on public.schedule_items
   for delete
   using (true);
+
+-- External calendar integration tables
+create table if not exists public.external_calendars (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade,
+  provider text not null check (provider in ('google', 'outlook')),
+  calendar_id text not null,
+  calendar_name text not null,
+  calendar_description text,
+  color text,
+  primary_calendar boolean not null default false,
+  sync_enabled boolean not null default true,
+  last_sync_at timestamptz,
+  sync_token text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(user_id, provider, calendar_id)
+);
+
+create table if not exists public.external_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade,
+  external_calendar_id uuid references public.external_calendars(id) on delete cascade,
+  external_event_id text not null,
+  title text not null,
+  description text,
+  location text,
+  start_at timestamptz not null,
+  end_at timestamptz not null,
+  all_day boolean not null default false,
+  recurring boolean not null default false,
+  recurrence_rule text,
+  status text check (status in ('confirmed', 'tentative', 'cancelled')),
+  attendees jsonb,
+  last_modified timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(external_calendar_id, external_event_id)
+);
+
+-- Enable RLS on new tables
+alter table public.external_calendars enable row level security;
+alter table public.external_events enable row level security;
+
+-- RLS policies for external_calendars
+create policy "users can read their own external calendars"
+  on public.external_calendars
+  for select
+  using (auth.uid() = user_id);
+
+create policy "users can insert their own external calendars"
+  on public.external_calendars
+  for insert
+  with check (auth.uid() = user_id);
+
+create policy "users can update their own external calendars"
+  on public.external_calendars
+  for update
+  using (auth.uid() = user_id);
+
+create policy "users can delete their own external calendars"
+  on public.external_calendars
+  for delete
+  using (auth.uid() = user_id);
+
+-- RLS policies for external_events
+create policy "users can read their own external events"
+  on public.external_events
+  for select
+  using (auth.uid() = user_id);
+
+create policy "users can insert their own external events"
+  on public.external_events
+  for insert
+  with check (auth.uid() = user_id);
+
+create policy "users can update their own external events"
+  on public.external_events
+  for update
+  using (auth.uid() = user_id);
+
+create policy "users can delete their own external events"
+  on public.external_events
+  for delete
+  using (auth.uid() = user_id);

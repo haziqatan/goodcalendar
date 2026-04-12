@@ -58,6 +58,7 @@ export interface TaskItem {
   workflow_config?: WorkflowConfig;
   workflow_parent_id?: string;
   workflow_stage_id?: string;
+  external_id?: string; // ID of the event in Google/Outlook
 }
 
 export interface ScheduleBlock {
@@ -90,4 +91,42 @@ export interface ScheduleWarning {
   severity: WarningSeverity;
   title: string;
   detail: string;
+}
+
+export type CalendarProvider = 'google' | 'outlook';
+
+export interface ExternalCalendar {
+  id: string;
+  user_id: string;
+  provider: CalendarProvider;
+  calendar_id: string;
+  calendar_name: string;
+  calendar_description?: string;
+  color?: string;
+  primary_calendar: boolean;
+  sync_enabled: boolean;
+  last_sync_at?: string;
+  sync_token?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalEvent {
+  id: string;
+  user_id: string;
+  external_calendar_id: string;
+  external_event_id: string;
+  title: string;
+  description?: string;
+  location?: string;
+  start_at: string;
+  end_at: string;
+  all_day: boolean;
+  recurring: boolean;
+  recurrence_rule?: string;
+  status?: 'confirmed' | 'tentative' | 'cancelled';
+  attendees?: any[];
+  last_modified: string;
+  created_at: string;
+  updated_at: string;
 }
