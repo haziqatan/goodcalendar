@@ -639,10 +639,7 @@ export default function App() {
   const dragStateRef = useRef<{
     taskId: string;
     task: TaskItem;
-    clone: HTMLElement | null;
-    sourceEl: HTMLElement;
     startX: number; startY: number;
-    offsetX: number; offsetY: number;
     isDragging: boolean;
   } | null>(null);
   const dropPreviewRef = useRef<DropPreview | null>(null);
@@ -2074,16 +2071,12 @@ export default function App() {
 
     event.preventDefault(); // suppress native drag & text-select
 
-    const sourceEl = event.currentTarget;
-    const rect = sourceEl.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const offsetX = event.clientX - rect.left;
-    const offsetY = event.clientY - rect.top;
 
     const state: NonNullable<typeof dragStateRef.current> = {
-      taskId, task, clone: null, sourceEl,
-      startX, startY, offsetX, offsetY, isDragging: false,
+      taskId, task,
+      startX, startY, isDragging: false,
     };
     dragStateRef.current = state;
 
@@ -2094,25 +2087,7 @@ export default function App() {
       if (!state.isDragging) {
         if (Math.sqrt(dx * dx + dy * dy) < 6) return;
         state.isDragging = true;
-
-        const clone = sourceEl.cloneNode(true) as HTMLElement;
-        clone.style.cssText = [
-          'position:fixed', 'pointer-events:none', 'z-index:9999',
-          `width:${rect.width}px`, `height:${rect.height}px`,
-          `left:${rect.left}px`, `top:${rect.top}px`,
-          'opacity:0.88', 'transform:scale(1.04) rotate(-0.4deg)',
-          'box-shadow:0 14px 44px rgba(0,0,0,0.22)',
-          'transition:transform 80ms ease,box-shadow 80ms ease,left 30ms ease-out,top 30ms ease-out',
-          'border-radius:10px', 'will-change:left,top',
-        ].join(';');
-        document.body.appendChild(clone);
-        state.clone = clone;
         setDraggingTaskId(taskId);
-      }
-
-      if (state.clone) {
-        state.clone.style.left = `${e.clientX - offsetX}px`;
-        state.clone.style.top = `${e.clientY - offsetY}px`;
       }
       computeDropPreview(e.clientX, e.clientY, task);
     };
@@ -2122,14 +2097,6 @@ export default function App() {
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onCancel);
       document.removeEventListener('visibilitychange', onVisibilityChange);
-
-      if (state.clone) {
-        state.clone.style.transition = 'opacity 120ms ease,transform 120ms ease';
-        state.clone.style.opacity = '0';
-        state.clone.style.transform = 'scale(0.95)';
-        const c = state.clone; state.clone = null;
-        setTimeout(() => c.remove(), 120);
-      }
 
       setDraggingTaskId(null);
 
