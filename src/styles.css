@@ -2297,6 +2297,84 @@ button {
   font-weight: 500;
 }
 
+/* Day tabs for per-day hour ranges */
+.preset-day-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 3px;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  border: 1px solid var(--line-soft);
+}
+
+.preset-day-tab {
+  flex: 1;
+  padding: 5px 0;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+  transition: background 120ms ease, color 120ms ease;
+  position: relative;
+}
+
+.preset-day-tab:hover {
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.preset-day-tab.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.preset-day-tab.has-override::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+.preset-day-tab.active.has-override::after {
+  background: var(--primary);
+}
+
+/* Inherit notice for days without override */
+.preset-range-inherit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-soft);
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+}
+
+.preset-range-inherit span {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Range action row */
+.preset-range-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .settings-modal__actions {
   justify-content: space-between;
   margin-top: 20px;

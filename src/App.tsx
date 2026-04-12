@@ -11,6 +11,7 @@ import {
   CircleHelp,
   Clock3,
   Coffee,
+  Copy,
   Link2,
   ListTodo,
   MapPin,
@@ -62,10 +63,15 @@ type PresetKind = 'working' | 'personal' | 'custom';
 type TaskGroupType = TaskType;
 type SchedulingMode = 'auto' | 'manual';
 
+type DayKey = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+const DAY_KEYS: DayKey[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const DAY_LABELS: Record<DayKey, string> = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+
 interface HourPreset {
   id: string;
   name: string;
-  ranges: TimeRange[];
+  ranges: TimeRange[]; // default ranges (used when no per-day override)
+  dailyRanges?: Partial<Record<DayKey, TimeRange[]>>; // per-day overrides
   kind: PresetKind;
 }
 
@@ -455,6 +461,23 @@ function presetSummary(preset: HourPreset) {
   return preset.ranges.map((range) => formatDisplayRange(range.start_minutes, range.end_minutes - range.start_minutes)).join(', ');
 }
 
+// Get the effective ranges for a specific day, falling back to the default ranges
+function getPresetRangesForDay(preset: HourPreset, day: DayKey): TimeRange[] {
+  return preset.dailyRanges?.[day] ?? preset.ranges;
+}
+
+// Get the JS Date day-of-week (0=Sun) as a DayKey
+function dateToDayKey(dateKey: string): DayKey {
+  const d = new Date(dateKey + 'T12:00:00');
+  return DAY_KEYS[(d.getDay() + 6) % 7]; // JS: 0=Sun → shift so 0=Mon
+}
+
+// Check how many days have custom overrides
+function countDailyOverrides(preset: HourPreset): number {
+  if (!preset.dailyRanges) return 0;
+  return Object.keys(preset.dailyRanges).length;
+}
+
 function rangesMatch(left: TimeRange[] | undefined, right: TimeRange[] | undefined) {
   const normalizedLeft = normalizeRanges(left);
   const normalizedRight = normalizeRanges(right);
@@ -663,6 +686,8 @@ export default function App() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [showHoursSettings, setShowHoursSettings] = useState(false);
+  // Tracks which day tab is active per preset in the hours settings modal (null = "All days" default)
+  const [presetDayTab, setPresetDayTab] = useState<Record<string, DayKey | null>>({});
   const [showBufferSettings, setShowBufferSettings] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -2255,6 +2280,77 @@ export default function App() {
     }));
   };
 
+  const duplicatePreset = (id: string) => {
+    const source = hourPresets.find((p) => p.id === id);
+    if (!source) return;
+    const newId = `custom-${crypto.randomUUID()}`;
+    setHourPresets((prev) => [
+      ...prev,
+      {
+        ...source,
+        id: newId,
+        name: `${source.name} (copy)`,
+        kind: 'custom' as PresetKind,
+        dailyRanges: source.dailyRanges ? { ...source.dailyRanges } : undefined,
+      },
+    ]);
+  };
+
+  // Update ranges for a specific day override
+  const updatePresetDayRange = (presetId: string, day: DayKey, rangeIndex: number, patch: Partial<TimeRange>) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) return preset;
+        const dayRanges = getPresetRangesForDay(preset, day);
+        const nextRanges = dayRanges.map((r, i) => (i === rangeIndex ? { ...r, ...patch } : r));
+        return { ...preset, dailyRanges: { ...preset.dailyRanges, [day]: normalizeRanges(nextRanges) } };
+      }),
+    );
+  };
+
+  const addPresetDayRange = (presetId: string, day: DayKey) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) return preset;
+        const dayRanges = getPresetRangesForDay(preset, day);
+        const last = dayRanges[dayRanges.length - 1] ?? { start_minutes: 9 * 60, end_minutes: 12 * 60 };
+        const nextStart = Math.min(last.end_minutes + DURATION_STEP, 22 * 60);
+        const nextEnd = Math.min(nextStart + 2 * 60, 24 * 60);
+        return { ...preset, dailyRanges: { ...preset.dailyRanges, [day]: normalizeRanges([...dayRanges, { start_minutes: nextStart, end_minutes: nextEnd }]) } };
+      }),
+    );
+  };
+
+  const deletePresetDayRange = (presetId: string, day: DayKey, rangeIndex: number) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId) return preset;
+        const dayRanges = getPresetRangesForDay(preset, day);
+        const nextRanges = dayRanges.filter((_, i) => i !== rangeIndex);
+        if (nextRanges.length === 0) {
+          // Removing last range for this day → remove the override entirely
+          const next = { ...preset.dailyRanges };
+          delete next[day];
+          return { ...preset, dailyRanges: Object.keys(next).length > 0 ? next : undefined };
+        }
+        return { ...preset, dailyRanges: { ...preset.dailyRanges, [day]: normalizeRanges(nextRanges) } };
+      }),
+    );
+  };
+
+  // Clear a day's override so it falls back to default ranges
+  const clearDayOverride = (presetId: string, day: DayKey) => {
+    setHourPresets((prev) =>
+      prev.map((preset) => {
+        if (preset.id !== presetId || !preset.dailyRanges) return preset;
+        const next = { ...preset.dailyRanges };
+        delete next[day];
+        return { ...preset, dailyRanges: Object.keys(next).length > 0 ? next : undefined };
+      }),
+    );
+    setPresetDayTab((prev) => ({ ...prev, [presetId]: null }));
+  };
+
   const toggleCompactSection = (bucket: PriorityBucket, type: TaskGroupType) => {
     const key = buildCompactSectionKey(bucket, type);
     setCollapsedCompactSections((current) => ({
@@ -3238,7 +3334,15 @@ export default function App() {
             </div>
 
             <div className="preset-list">
-              {hourPresets.map((preset) => (
+              {hourPresets.map((preset) => {
+                const activeDay = presetDayTab[preset.id] ?? null;
+                const hasOverride = activeDay !== null && preset.dailyRanges?.[activeDay] !== undefined;
+                const displayRanges = activeDay !== null
+                  ? getPresetRangesForDay(preset, activeDay)
+                  : preset.ranges;
+                const overrideCount = countDailyOverrides(preset);
+
+                return (
                 <div key={preset.id} className="preset-card">
                   <div className="preset-card__header">
                     <input
@@ -3253,40 +3357,130 @@ export default function App() {
                       ) : (
                         <span className="preset-kind">{preset.kind}</span>
                       )}
-                      <button type="button" className="ghost-btn" onClick={() => addPresetRange(preset.id)}>
-                        <Plus size={16} />
-                        Add range
+                      <button type="button" className="ghost-btn" onClick={() => duplicatePreset(preset.id)}>
+                        <Copy size={14} /> Duplicate
                       </button>
                     </div>
                   </div>
-                  <p className="preset-summary">{presetSummary(preset)}</p>
+                  <p className="preset-summary">
+                    {presetSummary(preset)}
+                    {overrideCount > 0 ? ` · ${overrideCount} day${overrideCount > 1 ? 's' : ''} customized` : ''}
+                  </p>
+
+                  {/* Day tabs: All days + Mon–Sun */}
+                  <div className="preset-day-tabs">
+                    <button
+                      type="button"
+                      className={`preset-day-tab ${activeDay === null ? 'active' : ''}`}
+                      onClick={() => setPresetDayTab((prev) => ({ ...prev, [preset.id]: null }))}
+                    >
+                      Default
+                    </button>
+                    {DAY_KEYS.map((day) => {
+                      const hasDayOverride = preset.dailyRanges?.[day] !== undefined;
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          className={`preset-day-tab ${activeDay === day ? 'active' : ''} ${hasDayOverride ? 'has-override' : ''}`}
+                          onClick={() => setPresetDayTab((prev) => ({ ...prev, [preset.id]: day }))}
+                        >
+                          {DAY_LABELS[day]}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Range rows for the active tab */}
                   <div className="preset-ranges">
-                    {preset.ranges.map((range, index) => (
-                      <div key={`${preset.id}-${index}`} className="preset-range-row">
-                        <span>Range {index + 1}</span>
-                        <input
-                          type="time"
-                          value={minutesToTimeInput(range.start_minutes)}
-                          onChange={(event) => updatePresetRange(preset.id, index, { start_minutes: timeInputToMinutes(event.target.value) })}
-                        />
-                        <input
-                          type="time"
-                          value={minutesToTimeInput(range.end_minutes)}
-                          onChange={(event) => updatePresetRange(preset.id, index, { end_minutes: timeInputToMinutes(event.target.value) })}
-                        />
+                    {activeDay !== null && !hasOverride ? (
+                      <div className="preset-range-inherit">
+                        <span>Using default ranges</span>
                         <button
                           type="button"
                           className="ghost-btn"
-                          onClick={() => deletePresetRange(preset.id, index)}
-                          disabled={preset.ranges.length === 1}
+                          onClick={() => {
+                            // Create a day override by copying the default ranges
+                            setHourPresets((prev) =>
+                              prev.map((p) => p.id !== preset.id ? p : {
+                                ...p,
+                                dailyRanges: { ...p.dailyRanges, [activeDay]: [...p.ranges.map((r) => ({ ...r }))] },
+                              }),
+                            );
+                          }}
                         >
-                          Remove
+                          Customize {DAY_LABELS[activeDay]}
                         </button>
                       </div>
-                    ))}
+                    ) : (
+                      <>
+                        {displayRanges.map((range, index) => (
+                          <div key={`${preset.id}-${activeDay ?? 'def'}-${index}`} className="preset-range-row">
+                            <span>Range {index + 1}</span>
+                            <input
+                              type="time"
+                              value={minutesToTimeInput(range.start_minutes)}
+                              onChange={(event) => {
+                                if (activeDay !== null) {
+                                  updatePresetDayRange(preset.id, activeDay, index, { start_minutes: timeInputToMinutes(event.target.value) });
+                                } else {
+                                  updatePresetRange(preset.id, index, { start_minutes: timeInputToMinutes(event.target.value) });
+                                }
+                              }}
+                            />
+                            <input
+                              type="time"
+                              value={minutesToTimeInput(range.end_minutes)}
+                              onChange={(event) => {
+                                if (activeDay !== null) {
+                                  updatePresetDayRange(preset.id, activeDay, index, { end_minutes: timeInputToMinutes(event.target.value) });
+                                } else {
+                                  updatePresetRange(preset.id, index, { end_minutes: timeInputToMinutes(event.target.value) });
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="ghost-btn"
+                              onClick={() => {
+                                if (activeDay !== null) {
+                                  deletePresetDayRange(preset.id, activeDay, index);
+                                } else {
+                                  deletePresetRange(preset.id, index);
+                                }
+                              }}
+                              disabled={displayRanges.length === 1 && activeDay === null}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                        <div className="preset-range-actions">
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={() => {
+                              if (activeDay !== null) {
+                                addPresetDayRange(preset.id, activeDay);
+                              } else {
+                                addPresetRange(preset.id);
+                              }
+                            }}
+                          >
+                            <Plus size={14} /> Add range
+                          </button>
+                          {activeDay !== null && hasOverride ? (
+                            <button type="button" className="ghost-btn" onClick={() => clearDayOverride(preset.id, activeDay)}>
+                              Reset to default
+                            </button>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="settings-modal__actions">
