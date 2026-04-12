@@ -6,6 +6,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Circle,
+  CircleCheck,
   CircleHelp,
   Clock3,
   Coffee,
@@ -2236,7 +2238,18 @@ export default function App() {
             <div className="priority-card__accent" />
             <div className="priority-card__content">
               <div className="priority-card__compact-row">
-                <strong>{task.title}</strong>
+                <button
+                  type="button"
+                  className={`priority-card__done-btn ${task.done ? 'is-done' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void toggleTask(task.id);
+                  }}
+                  aria-label={task.done ? 'Mark undone' : 'Mark done'}
+                >
+                  {task.done ? <CircleCheck size={16} /> : <Circle size={16} />}
+                </button>
+                <strong className={task.done ? 'is-done' : ''}>{task.title}</strong>
                 <span className="priority-card__compact-meta">
                   <Clock3 size={11} />{task.duration}m
                   {taskDueDateKey(task) ? <><span className="priority-card__sep">·</span>{formatDate(taskDueDateKey(task), { month: 'short', day: 'numeric' })}</> : null}

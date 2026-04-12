@@ -1308,6 +1308,35 @@ button {
   margin: 0 1px;
 }
 
+.priority-card__done-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--line);
+  border-radius: 50%;
+  transition: color 0.15s;
+}
+
+.priority-card__done-btn:hover {
+  color: var(--green);
+}
+
+.priority-card__done-btn.is-done {
+  color: var(--green);
+}
+
+.priority-card.compact strong.is-done {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
 /* Accent bar colours */
 .priority-card__accent {
   background: var(--line);
