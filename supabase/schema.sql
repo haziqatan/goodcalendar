@@ -40,6 +40,11 @@ alter table public.schedule_items add column if not exists earliest_start_at tim
 alter table public.schedule_items add column if not exists schedule_after date;
 alter table public.schedule_items add column if not exists due_at timestamp without time zone;
 alter table public.schedule_items add column if not exists is_pinned boolean not null default false;
+alter table public.schedule_items add column if not exists done_at timestamptz;
+alter table public.schedule_items add column if not exists deleted_at timestamptz;
+alter table public.schedule_items add column if not exists workflow_config jsonb;
+alter table public.schedule_items add column if not exists workflow_parent_id uuid references public.schedule_items(id) on delete cascade;
+alter table public.schedule_items add column if not exists workflow_stage_id text;
 
 update public.schedule_items
 set
@@ -104,4 +109,11 @@ create policy "public insert schedule items"
 create policy "public update schedule items"
   on public.schedule_items
   for update
+  using (true);
+
+drop policy if exists "public delete schedule items" on public.schedule_items;
+
+create policy "public delete schedule items"
+  on public.schedule_items
+  for delete
   using (true);

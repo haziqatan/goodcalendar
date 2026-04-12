@@ -1957,13 +1957,14 @@ export default function App() {
     }
 
     const nextDone = !target.done;
-    const patch: Partial<TaskItem> = {
-      done: nextDone,
-      done_at: nextDone ? new Date().toISOString() : undefined,
-    };
-    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, ...patch } : task)));
+    const now = new Date().toISOString();
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, done: nextDone, done_at: nextDone ? now : undefined } : task)));
     setStatusMessage(`${target.title} marked ${nextDone ? 'complete' : 'active'}.`);
-    await persistTaskUpdate(id, patch, previousTasks);
+    await persistTaskUpdate(id, { done: nextDone, done_at: nextDone ? now : undefined } as Partial<TaskItem>, previousTasks);
+    // Also clear done_at in Supabase when un-completing (undefined won't send null)
+    if (!nextDone && supabase) {
+      await supabase.from('schedule_items').update({ done_at: null }).eq('id', id);
+    }
   };
 
   const updateTaskPriority = async (id: string, priority: TaskPriority) => {
