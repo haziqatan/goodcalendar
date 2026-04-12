@@ -291,11 +291,11 @@ function compareTaskImportance(left: TaskItem, right: TaskItem) {
     return priorityDifference;
   }
 
-  const leftDeadline = taskDueValue(left) ?? '9999-12-31';
-  const rightDeadline = taskDueValue(right) ?? '9999-12-31';
-  if (leftDeadline !== rightDeadline) {
-    return leftDeadline.localeCompare(rightDeadline);
+  const dueDifference = compareDueMoments(taskDueValue(left), taskDueValue(right));
+  if (dueDifference !== 0) {
+    return dueDifference;
   }
+
 
   const leftScheduleAfter = taskEarliestDate(left);
   const rightScheduleAfter = taskEarliestDate(right);
@@ -304,6 +304,21 @@ function compareTaskImportance(left: TaskItem, right: TaskItem) {
   }
 
   return left.title.localeCompare(right.title);
+}
+
+function normalizeComparableDueValue(value?: string) {
+  if (!value) return Number.POSITIVE_INFINITY;
+
+  const normalized = value.includes('T') || value.includes(' ')
+    ? value.replace(' ', 'T')
+    : `${value}T23:59:59`;
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+function compareDueMoments(left?: string, right?: string) {
+  return normalizeComparableDueValue(left) - normalizeComparableDueValue(right);
 }
 
 function preferredDate(task: TaskItem) {
@@ -354,8 +369,13 @@ function compareFocusFlexibility(left: TaskItem, right: TaskItem) {
 
 function getTaskHorizon(task: TaskItem, startDate: string, endDate: string) {
   const earliest = preferredDate(task) > startDate ? preferredDate(task) : startDate;
-  const naturalLatest = dateKeyFromDateTime(task.due_at) || task.deadline || addDays(task.scheduled_date, task.type === 'buffer' ? 2 : 7);
+  const naturalLatest =
+    dateKeyFromDateTime(task.due_at) ||
+    task.deadline ||
+    addDays(task.scheduled_date, task.type === 'buffer' ? 2 : 7);
+
   const latest = naturalLatest > endDate ? endDate : naturalLatest;
+
   return {
     earliest,
     latest: latest >= earliest ? latest : earliest,
@@ -855,7 +875,7 @@ export function buildWarnings(
           .reduce((earliest, current) => (current < earliest ? current : earliest)),
         end: addDays(
           activeTasks
-            .map((task) => task.deadline ?? task.scheduled_date)
+            .map((task) => dateKeyFromDateTime(task.due_at) || task.deadline || task.scheduled_date)
             .reduce((latest, current) => (current > latest ? current : latest)),
           14,
         ),
