@@ -1262,11 +1262,50 @@ button {
 
 .priority-card.compact {
   box-shadow: none;
-  border-radius: 12px;
+  border-radius: 10px;
+  border-color: var(--line-soft);
 }
 
 .priority-card.compact:hover {
   box-shadow: var(--shadow-xs);
+  transform: translateY(0);
+}
+
+.priority-card.compact .priority-card__content {
+  padding: 7px 10px;
+}
+
+.priority-card__compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.priority-card.compact strong {
+  font-size: 0.8rem;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.priority-card__compact-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.priority-card__sep {
+  color: var(--line);
+  margin: 0 1px;
 }
 
 /* Accent bar colours */

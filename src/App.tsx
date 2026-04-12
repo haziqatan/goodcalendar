@@ -2225,10 +2225,32 @@ export default function App() {
         ? `${taskBlocks.length} blocks · next ${formatDate(nextBlock.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} ${formatDisplayTime(nextBlock.start_minutes)}`
         : `${formatDate(task.scheduled_date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${formatDisplayRange(task.start_minutes, task.duration)}`;
 
+      if (compact) {
+        return (
+          <article
+            key={task.id}
+            className={`priority-card compact priority-${taskBucket(task, todayKey)}${draggingPriorityTaskId === task.id ? ' is-dragging-source' : ''}`}
+            onPointerDown={handlePriorityCardPointerDown(task)}
+            onClick={() => openEditTaskModal(task)}
+          >
+            <div className="priority-card__accent" />
+            <div className="priority-card__content">
+              <div className="priority-card__compact-row">
+                <strong>{task.title}</strong>
+                <span className="priority-card__compact-meta">
+                  <Clock3 size={11} />{task.duration}m
+                  {taskDueDateKey(task) ? <><span className="priority-card__sep">·</span>{formatDate(taskDueDateKey(task), { month: 'short', day: 'numeric' })}</> : null}
+                </span>
+              </div>
+            </div>
+          </article>
+        );
+      }
+
       return (
         <article
           key={task.id}
-          className={`priority-card priority-${taskBucket(task, todayKey)} ${compact ? 'compact' : ''}${draggingPriorityTaskId === task.id ? ' is-dragging-source' : ''}`}
+          className={`priority-card priority-${taskBucket(task, todayKey)}${draggingPriorityTaskId === task.id ? ' is-dragging-source' : ''}`}
           onPointerDown={handlePriorityCardPointerDown(task)}
           onClick={() => openEditTaskModal(task)}
         >
