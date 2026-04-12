@@ -2366,11 +2366,11 @@ button {
   scrollbar-color: var(--line) transparent;
 }
 
-/* 7 columns: enable | name | duration | est days | hours | dates | remove */
+/* 6 columns: enable | name | duration | hours | dates | remove */
 .workflow-stages-header,
 .workflow-stage-row {
   display: grid;
-  grid-template-columns: 28px minmax(140px, 1fr) 86px 52px 120px minmax(180px, 210px) 28px;
+  grid-template-columns: 28px minmax(140px, 1fr) minmax(150px, 170px) 120px minmax(180px, 210px) 28px;
   gap: 6px;
   align-items: center;
   padding: 7px 14px;
@@ -2469,8 +2469,8 @@ button {
   letter-spacing: 0.02em;
 }
 
-/* Min / Max day controls */
-.stage-days-control {
+/* Duration control: [−] [input] [unit] [+] */
+.stage-duration-control {
   display: flex;
   align-items: center;
   gap: 3px;
@@ -2502,12 +2502,58 @@ button {
   cursor: not-allowed;
 }
 
-.stage-days-val {
-  min-width: 28px;
+.stage-duration-input {
+  width: 44px;
   text-align: center;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  padding: 3px 2px;
+  outline: none;
+  transition: border-color 150ms ease;
+  -moz-appearance: textfield;
+}
+
+.stage-duration-input::-webkit-inner-spin-button,
+.stage-duration-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stage-duration-input:focus:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.stage-duration-input:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.stage-unit-select {
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 4px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 150ms ease;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.stage-unit-select:focus:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.stage-unit-select:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* Hours preset selector */
@@ -2542,14 +2588,6 @@ button {
 
 .stage-dates.muted {
   color: var(--muted);
-}
-
-/* Est. days column */
-.stage-est-days {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--text-2);
-  text-align: center;
 }
 
 /* Remove stage button */

@@ -15,6 +15,8 @@ export interface BufferSettings {
   travel_time: number;
 }
 
+export type DurationUnit = 'm' | 'h' | 'd' | 'w' | 'mo';
+
 export interface WorkflowStage {
   id: string;
   name: string;
@@ -22,6 +24,7 @@ export interface WorkflowStage {
   minutes: number;     // auto-suggested (proportional), user-editable; in minutes
   weight: number;      // relative weight for proportional auto-distribution
   hourPresetId: string;
+  durationUnit?: DurationUnit; // display preference for duration input
 }
 
 export interface WorkflowConfig {

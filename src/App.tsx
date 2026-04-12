@@ -53,7 +53,7 @@ import {
   startOfWeek,
   toDateKey,
 } from './lib/scheduler';
-import type { BufferSettings, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowAllocationMode, WorkflowConfig, WorkflowStage } from './types';
+import type { BufferSettings, DurationUnit, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowAllocationMode, WorkflowConfig, WorkflowStage } from './types';
 
 type ViewMode = 'planner' | 'priorities';
 type RailTab = 'priorities' | 'tasks';
@@ -185,6 +185,50 @@ function formatDuration(minutes: number): string {
   if (days === 0) return `${totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h`;
   if (remHours === 0) return `${days}d`;
   return `${days}d ${remHours}h`;
+}
+
+// ── Duration unit helpers ────────────────────────────────────────────────────
+
+const DURATION_UNITS: DurationUnit[] = ['m', 'h', 'd', 'w', 'mo'];
+const DURATION_UNIT_LABELS: Record<DurationUnit, string> = { m: 'min', h: 'hr', d: 'day', w: 'wk', mo: 'mo' };
+
+// Get the number of minutes that 1 working day represents for a given preset
+function presetDailyMinutes(ranges: TimeRange[]): number {
+  const total = ranges.reduce((sum, r) => sum + ((r.end_minutes ?? 0) - (r.start_minutes ?? 0)), 0);
+  return total > 0 ? total : 480; // fallback 8h
+}
+
+// Convert minutes to a display value in the given unit
+function minutesToUnit(minutes: number, unit: DurationUnit, dailyMinutes: number): number {
+  switch (unit) {
+    case 'm': return Math.round(minutes);
+    case 'h': return Math.round(minutes / 60 * 10) / 10;
+    case 'd': return Math.round(minutes / dailyMinutes * 10) / 10;
+    case 'w': return Math.round(minutes / (dailyMinutes * 5) * 10) / 10;
+    case 'mo': return Math.round(minutes / (dailyMinutes * 20) * 10) / 10;
+  }
+}
+
+// Convert a display value back to minutes
+function unitToMinutes(value: number, unit: DurationUnit, dailyMinutes: number): number {
+  switch (unit) {
+    case 'm': return Math.max(15, Math.round(value / 15) * 15);
+    case 'h': return Math.max(15, Math.round(value * 60 / 15) * 15);
+    case 'd': return Math.max(15, Math.round(value * dailyMinutes / 15) * 15);
+    case 'w': return Math.max(15, Math.round(value * dailyMinutes * 5 / 15) * 15);
+    case 'mo': return Math.max(15, Math.round(value * dailyMinutes * 20 / 15) * 15);
+  }
+}
+
+// Step size in minutes for +/- buttons given a unit
+function unitStepMinutes(unit: DurationUnit, dailyMinutes: number): number {
+  switch (unit) {
+    case 'm': return 15;
+    case 'h': return 60;
+    case 'd': return dailyMinutes;
+    case 'w': return dailyMinutes * 5;
+    case 'mo': return dailyMinutes * 20;
+  }
 }
 
 // Snap minutes to nearest 15
@@ -3030,15 +3074,15 @@ export default function App() {
                             </button>
                           </div>
                           <div className="workflow-stages-header">
-                            <span /><span>Stage</span><span>Duration</span><span>Est. days</span><span>Hours</span><span>Timeline</span><span />
+                            <span /><span>Stage</span><span>Duration</span><span>Hours</span><span>Timeline</span><span />
                           </div>
                           {calculatedStages.map((stage, index) => {
-                            // Estimate working days: stage minutes ÷ daily available hours from preset
                             const preset = hourPresets.find((p) => p.id === stage.hourPresetId);
-                            const dailyMinutes = preset
-                              ? preset.ranges.reduce((sum, r) => sum + ((r.end_minutes ?? 0) - (r.start_minutes ?? 0)), 0)
-                              : 480; // fallback 8h
-                            const estDays = dailyMinutes > 0 ? Math.ceil(stage.minutes / dailyMinutes) : 1;
+                            const daily = presetDailyMinutes(preset?.ranges ?? []);
+                            const unit: DurationUnit = stage.durationUnit ?? 'h';
+                            const displayVal = minutesToUnit(stage.minutes, unit, daily);
+                            const step = unitStepMinutes(unit, daily);
+                            const isManual = draft.workflowAllocationMode === 'manual';
 
                             return (
                             <div key={stage.id} className={`workflow-stage-row ${stage.enabled ? '' : 'disabled'}`}>
@@ -3056,26 +3100,46 @@ export default function App() {
                                   placeholder="Stage name"
                                 />
                               </div>
-                              <div className="stage-days-control">
+                              <div className="stage-duration-control">
                                 <button
                                   type="button"
                                   className="stage-days-btn"
-                                  disabled={!stage.enabled || draft.workflowAllocationMode === 'auto'}
-                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: Math.max(15, s.minutes - 15) } : s) }))}
+                                  disabled={!stage.enabled || !isManual}
+                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: Math.max(15, s.minutes - step) } : s) }))}
                                 >
                                   −
                                 </button>
-                                <span className="stage-days-val">{formatDuration(stage.minutes)}</span>
+                                <input
+                                  type="number"
+                                  className="stage-duration-input"
+                                  value={displayVal}
+                                  disabled={!stage.enabled || !isManual}
+                                  min={0}
+                                  step={unit === 'm' ? 15 : unit === 'h' ? 0.5 : 0.5}
+                                  onChange={(event) => {
+                                    const val = Number(event.target.value);
+                                    if (!Number.isFinite(val) || val < 0) return;
+                                    const mins = unitToMinutes(val, unit, daily);
+                                    setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: mins } : s) }));
+                                  }}
+                                />
+                                <select
+                                  className="stage-unit-select"
+                                  value={unit}
+                                  disabled={!stage.enabled}
+                                  onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, durationUnit: event.target.value as DurationUnit } : s) }))}
+                                >
+                                  {DURATION_UNITS.map((u) => <option key={u} value={u}>{DURATION_UNIT_LABELS[u]}</option>)}
+                                </select>
                                 <button
                                   type="button"
                                   className="stage-days-btn"
-                                  disabled={!stage.enabled || draft.workflowAllocationMode === 'auto'}
-                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: s.minutes + 15 } : s) }))}
+                                  disabled={!stage.enabled || !isManual}
+                                  onClick={() => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, minutes: s.minutes + step } : s) }))}
                                 >
                                   +
                                 </button>
                               </div>
-                              <span className="stage-est-days">{stage.enabled ? `${estDays}d` : '—'}</span>
                               <select className="stage-hours-select" value={stage.hourPresetId} disabled={!stage.enabled} onChange={(event) => setDraft((prev) => ({ ...prev, workflowStages: prev.workflowStages.map((s) => s.id === stage.id ? { ...s, hourPresetId: event.target.value } : s) }))}>
                                 {hourPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
@@ -3119,20 +3183,11 @@ export default function App() {
                             const enabled = calculatedStages.filter((s) => s.enabled);
                             const last = enabled[enabled.length - 1];
                             const total = enabled.reduce((sum, s) => sum + s.minutes, 0);
-                            const totalDays = (() => {
-                              let days = 0;
-                              for (const s of enabled) {
-                                const p = hourPresets.find((pr) => pr.id === s.hourPresetId);
-                                const dm = p ? p.ranges.reduce((sum, r) => sum + ((r.end_minutes ?? 0) - (r.start_minutes ?? 0)), 0) : 480;
-                                days += dm > 0 ? Math.ceil(s.minutes / dm) : 1;
-                              }
-                              return days;
-                            })();
                             const unresolved = enabled.filter((stage) => !stage.startDt).length;
                             const over = Boolean(draft.deadline && last?.endDt && last.endDt > draft.deadline);
                             return (
                               <div className={`workflow-total ${over ? 'over-deadline' : ''}`}>
-                                <span>{enabled.length} stages · {formatDuration(total)} total · ~{totalDays} working day{totalDays !== 1 ? 's' : ''}{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
+                                <span>{enabled.length} stages · {formatDuration(total)} total{draft.deadline && draft.scheduleAfter ? ` of ${formatDuration(minutesBetweenDt(draft.scheduleAfter, draft.deadline))} available` : ''}</span>
                                 {unresolved > 0
                                   ? <span>{unresolved} stage{unresolved > 1 ? 's' : ''} could not be placed</span>
                                   : last?.endDt
