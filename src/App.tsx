@@ -518,6 +518,30 @@ function datetimeToStartMinutes(dt: string): number {
 
 // (Active definitions for taskDueValue, taskDueDateKey, compareTaskDueValues, getSchedulingModeLabel are below)
 
+function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at ?? task.deadline ?? '';
+}
+
+function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at
+    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
+    : (task.deadline ?? '');
+}
+
+function compareTaskDueValues(left?: string, right?: string) {
+  const leftValue = left
+    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+  const rightValue = right
+    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+
+  return leftValue - rightValue;
+}
+
+function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
+  return task.is_pinned ? 'Manual' : 'Auto';
+}
 
 function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
   return {
@@ -1036,7 +1060,7 @@ export default function App() {
     const relevantTasks = scheduledTasks.filter((task) => isSchedulableTask(task));
     const planningStartSeeds = [todayKey, weekDates[0], ...relevantTasks.map((task) => task.schedule_after ?? task.scheduled_date)];
     const resolvedPlanningStart = planningStartSeeds.reduce((earliest, current) => (current < earliest ? current : earliest));
-    const planningEndSeeds = [weekDates[6], ...relevantTasks.map((task) => task.deadline ?? task.scheduled_date)];
+    const planningEndSeeds = [weekDates[6], ...relevantTasks.map((task) => taskDueDateKey(task) || task.scheduled_date)];
     const resolvedPlanningEnd = addDays(
       planningEndSeeds.reduce((latest, current) => (current > latest ? current : latest)),
       14,
@@ -1935,7 +1959,8 @@ export default function App() {
     const task = tasks.find((entry) => entry.id === taskId);
     if (!task) return;
 
-    const afterDeadline = Boolean(task.deadline && dateKey > task.deadline);
+    const dueDateKey = taskDueDateKey(task);
+    const afterDeadline = Boolean(dueDateKey && dateKey > dueDateKey);
     const previousTasks = tasks;
 
     setTasks(sortTasksChronologically(
@@ -3212,27 +3237,3 @@ export default function App() {
 }
 
 // Active definitions for taskDueValue, taskDueDateKey, compareTaskDueValues, getSchedulingModeLabel
-function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
-  return task.due_at ?? task.deadline ?? '';
-}
-
-function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
-  return task.due_at
-    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
-    : (task.deadline ?? '');
-}
-
-function compareTaskDueValues(left?: string, right?: string) {
-  const leftValue = left
-    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-  const rightValue = right
-    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-
-  return leftValue - rightValue;
-}
-
-function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
-  return task.is_pinned ? 'Manual' : 'Auto';
-}
