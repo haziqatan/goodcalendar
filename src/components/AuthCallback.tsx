@@ -1,53 +1,34 @@
 import { useEffect } from 'react';
-import { supabase } from '../lib/supabase';
-import { calendarSyncService } from '../lib/calendarSync';
 
+/**
+ * Handles OAuth redirects for both:
+ *  1. Popup flow (direct Google/Outlook OAuth) — posts token back to opener then closes
+ *  2. Full-page redirect flow (Supabase OAuth) — redirects to /?calendarConnected=true
+ */
 export const AuthCallback: React.FC = () => {
   useEffect(() => {
-    const handleAuthCallback = async () => {
-      try {
-        if (!supabase) {
-          window.location.replace('/');
-          return;
-        }
+    // Extract token from URL hash (implicit / token flow)
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const token = params.get('access_token');
+    const error = params.get('error');
 
-        const { data, error } = await supabase.auth.getSession();
+    if (window.opener) {
+      // We're in a popup — relay the result back to the parent window and close
+      window.opener.postMessage(
+        { type: 'oauth-token', token: token ?? null, error: error ?? null },
+        window.location.origin
+      );
+      window.close();
+      return;
+    }
 
-        if (error || !data.session) {
-          console.error('Auth callback error:', error);
-          window.location.replace('/');
-          return;
-        }
-
-        const providerToken = data.session.provider_token;
-        if (providerToken) {
-          // Detect provider from the session and import calendars
-          const provider = (data.session.user?.app_metadata?.provider ?? '') as string;
-          try {
-            if (provider === 'google') {
-              const cals = await calendarSyncService.fetchGoogleCalendars(providerToken);
-              for (const cal of cals) {
-                try { await calendarSyncService.addCalendar(cal); } catch { /* already exists */ }
-              }
-            } else if (provider === 'azure') {
-              const cals = await calendarSyncService.fetchOutlookCalendars(providerToken);
-              for (const cal of cals) {
-                try { await calendarSyncService.addCalendar(cal); } catch { /* already exists */ }
-              }
-            }
-          } catch (err) {
-            console.error('Failed to import calendars after auth:', err);
-          }
-        }
-
-        window.location.replace('/?calendarConnected=true');
-      } catch (err) {
-        console.error('Auth callback failed:', err);
-        window.location.replace('/');
-      }
-    };
-
-    handleAuthCallback();
+    // Full-page redirect fallback
+    if (token) {
+      window.location.replace('/?calendarConnected=true');
+    } else {
+      window.location.replace('/');
+    }
   }, []);
 
   return (

@@ -11,35 +11,100 @@ export class CalendarSyncService {
     return CalendarSyncService.instance;
   }
 
-  // OAuth and authentication methods
-  async authenticateWithGoogle(): Promise<void> {
-    if (!supabase) throw new Error('Supabase not configured');
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        scopes: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
-        redirectTo: `${window.location.origin}/auth/callback`
-      }
-    });
+  // --- Token storage (localStorage, 1-hour TTL) ---
 
-    if (error) {
-      throw new Error(`Google authentication failed: ${error.message}`);
+  private storeToken(key: string, token: string): void {
+    localStorage.setItem(key, JSON.stringify({ token, expires_at: Date.now() + 3_600_000 }));
+  }
+
+  getStoredToken(key: string): string | null {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const { token, expires_at } = JSON.parse(raw) as { token: string; expires_at: number };
+      if (Date.now() > expires_at) { localStorage.removeItem(key); return null; }
+      return token;
+    } catch { return null; }
+  }
+
+  clearToken(key: string): void {
+    localStorage.removeItem(key);
+  }
+
+  // --- Direct Google OAuth popup (no Supabase provider needed) ---
+
+  async authenticateWithGoogle(): Promise<void> {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    if (!clientId) throw new Error('VITE_GOOGLE_CLIENT_ID is not set in your .env file');
+
+    const token = await this.openOAuthPopup(
+      'https://accounts.google.com/o/oauth2/auth',
+      new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: `${window.location.origin}/auth/callback`,
+        response_type: 'token',
+        scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+        prompt: 'consent',
+      })
+    );
+
+    this.storeToken('google_calendar_token', token);
+
+    // Import calendars immediately
+    const cals = await this.fetchGoogleCalendars(token);
+    for (const cal of cals) {
+      try { await this.addCalendar(cal); } catch { /* already exists */ }
     }
   }
 
   async authenticateWithOutlook(): Promise<void> {
-    if (!supabase) throw new Error('Supabase not configured');
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'azure',
-      options: {
-        scopes: 'Calendars.Read Calendars.ReadWrite',
-        redirectTo: `${window.location.origin}/auth/callback`
-      }
-    });
+    const clientId = import.meta.env.VITE_OUTLOOK_CLIENT_ID as string | undefined;
+    if (!clientId) throw new Error('VITE_OUTLOOK_CLIENT_ID is not set in your .env file');
 
-    if (error) {
-      throw new Error(`Outlook authentication failed: ${error.message}`);
+    const token = await this.openOAuthPopup(
+      'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: `${window.location.origin}/auth/callback`,
+        response_type: 'token',
+        scope: 'Calendars.Read Calendars.ReadWrite',
+        response_mode: 'fragment',
+      })
+    );
+
+    this.storeToken('outlook_calendar_token', token);
+
+    const cals = await this.fetchOutlookCalendars(token);
+    for (const cal of cals) {
+      try { await this.addCalendar(cal); } catch { /* already exists */ }
     }
+  }
+
+  private openOAuthPopup(baseUrl: string, params: URLSearchParams): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const popup = window.open(
+        `${baseUrl}?${params}`,
+        'oauth-popup',
+        'width=520,height=620,left=300,top=150'
+      );
+      if (!popup) { reject(new Error('Popup blocked — please allow popups for this site')); return; }
+
+      const onMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type !== 'oauth-token') return;
+        cleanup();
+        if (event.data.token) resolve(event.data.token);
+        else reject(new Error(event.data.error ?? 'OAuth failed'));
+      };
+
+      window.addEventListener('message', onMessage);
+
+      const poll = setInterval(() => {
+        if (popup.closed) { cleanup(); reject(new Error('Authentication cancelled')); }
+      }, 800);
+
+      function cleanup() { clearInterval(poll); window.removeEventListener('message', onMessage); }
+    });
   }
 
   // Fetch calendars from external providers
@@ -162,8 +227,11 @@ export class CalendarSyncService {
     const calendar = await this.getCalendarById(calendarId);
     if (!calendar) throw new Error('Calendar not found');
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const providerToken = session?.provider_token;
+    const supabaseToken = supabase ? (await supabase.auth.getSession()).data.session?.provider_token : null;
+    const storedToken = calendar.provider === 'google'
+      ? this.getStoredToken('google_calendar_token')
+      : this.getStoredToken('outlook_calendar_token');
+    const providerToken = supabaseToken ?? storedToken;
     if (!providerToken) throw new Error('No provider access token available');
 
     // Convert local schedule to ISO dates
@@ -222,11 +290,14 @@ export class CalendarSyncService {
       throw new Error('Calendar not found');
     }
 
-    // Get access token from Supabase auth
-    const { data: { session } } = await supabase.auth.getSession();
-    const providerToken = session?.provider_token;
+    // Prefer stored direct-OAuth token, fall back to Supabase provider token
+    const supabaseToken = supabase ? (await supabase.auth.getSession()).data.session?.provider_token : null;
+    const storedToken = calendar.provider === 'google'
+      ? this.getStoredToken('google_calendar_token')
+      : this.getStoredToken('outlook_calendar_token');
+    const providerToken = storedToken ?? supabaseToken;
     if (!providerToken) {
-      throw new Error('No provider access token available. Please re-authenticate.');
+      throw new Error('No access token available. Please reconnect your calendar.');
     }
 
     try {

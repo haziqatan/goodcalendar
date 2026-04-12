@@ -11,6 +11,10 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ onClos
   const [calendars, setCalendars] = useState<ExternalCalendar[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const hasGoogleClientId = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
+  const hasOutlookClientId = Boolean(import.meta.env.VITE_OUTLOOK_CLIENT_ID);
 
   useEffect(() => {
     loadCalendars();
@@ -26,11 +30,14 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ onClos
   };
 
   const handleGoogleAuth = async () => {
+    setAuthError(null);
     try {
       setLoading(true);
       await calendarSyncService.authenticateWithGoogle();
-      // Note: The actual calendar fetching will happen after auth callback
+      await loadCalendars();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Google auth failed';
+      setAuthError(msg);
       console.error('Google auth failed:', error);
     } finally {
       setLoading(false);
@@ -38,11 +45,14 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ onClos
   };
 
   const handleOutlookAuth = async () => {
+    setAuthError(null);
     try {
       setLoading(true);
       await calendarSyncService.authenticateWithOutlook();
-      // Note: The actual calendar fetching will happen after auth callback
+      await loadCalendars();
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Outlook auth failed';
+      setAuthError(msg);
       console.error('Outlook auth failed:', error);
     } finally {
       setLoading(false);
@@ -92,24 +102,38 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ onClos
       </div>
 
       <div className="auth-providers">
-        <button
-          onClick={handleGoogleAuth}
-          className="auth-button google"
-          disabled={loading}
-        >
-          <Calendar size={20} />
-          Connect Google Calendar
-        </button>
+        <div className="auth-provider-wrap">
+          <button
+            onClick={handleGoogleAuth}
+            className="auth-button google"
+            disabled={loading || !hasGoogleClientId}
+            title={hasGoogleClientId ? undefined : 'Add VITE_GOOGLE_CLIENT_ID to your .env file'}
+          >
+            <Calendar size={20} />
+            Connect Google Calendar
+          </button>
+          {!hasGoogleClientId && (
+            <p className="env-hint">Set <code>VITE_GOOGLE_CLIENT_ID</code> in <code>.env</code></p>
+          )}
+        </div>
 
-        <button
-          onClick={handleOutlookAuth}
-          className="auth-button outlook"
-          disabled={loading}
-        >
-          <Calendar size={20} />
-          Connect Outlook Calendar
-        </button>
+        <div className="auth-provider-wrap">
+          <button
+            onClick={handleOutlookAuth}
+            className="auth-button outlook"
+            disabled={loading || !hasOutlookClientId}
+            title={hasOutlookClientId ? undefined : 'Add VITE_OUTLOOK_CLIENT_ID to your .env file'}
+          >
+            <Calendar size={20} />
+            Connect Outlook Calendar
+          </button>
+          {!hasOutlookClientId && (
+            <p className="env-hint">Set <code>VITE_OUTLOOK_CLIENT_ID</code> in <code>.env</code></p>
+          )}
+        </div>
       </div>
+
+      {authError && <p className="auth-error">{authError}</p>}
 
       <div className="calendars-list">
         <h3>Your Calendars</h3>
@@ -189,8 +213,40 @@ export const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ onClos
         .auth-providers {
           display: flex;
           gap: 15px;
-          margin-bottom: 30px;
+          margin-bottom: 20px;
           justify-content: center;
+          flex-wrap: wrap;
+        }
+
+        .auth-provider-wrap {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .env-hint {
+          font-size: 11px;
+          color: #999;
+          margin: 0;
+          text-align: center;
+        }
+
+        .env-hint code {
+          background: #f4f4f4;
+          padding: 1px 4px;
+          border-radius: 3px;
+          font-size: 11px;
+        }
+
+        .auth-error {
+          background: #fff5f5;
+          border: 1px solid #fca5a5;
+          color: #b91c1c;
+          border-radius: 6px;
+          padding: 10px 14px;
+          font-size: 13px;
+          margin-bottom: 16px;
         }
 
         .auth-button {
