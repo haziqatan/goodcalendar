@@ -31,34 +31,60 @@ export class CalendarSyncService {
     localStorage.removeItem(key);
   }
 
-  // --- Direct Google OAuth popup (no Supabase provider needed) ---
+  // --- Google auth via Google Identity Services (GIS) TokenClient ---
 
   async authenticateWithGoogle(): Promise<void> {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
     if (!clientId) throw new Error('VITE_GOOGLE_CLIENT_ID is not set in your .env file');
 
-    const token = await this.openOAuthPopup(
-      'https://accounts.google.com/o/oauth2/auth',
-      new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: `${window.location.origin}/auth/callback`,
-        response_type: 'token',
-        scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
-        prompt: 'consent',
-      })
-    );
-
+    const token = await this.requestGoogleTokenViaGIS(clientId);
     this.storeToken('google_calendar_token', token);
 
-    // Import calendars immediately
     const cals = await this.fetchGoogleCalendars(token);
     for (const cal of cals) {
       try { await this.addCalendar(cal); } catch { /* already exists */ }
     }
   }
 
+  private loadGIS(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if ((window as any).google?.accounts?.oauth2) { resolve(); return; }
+      const existing = document.getElementById('gis-script');
+      if (existing) { existing.addEventListener('load', () => resolve()); return; }
+      const script = document.createElement('script');
+      script.id = 'gis-script';
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+      document.head.appendChild(script);
+    });
+  }
+
+  private async requestGoogleTokenViaGIS(clientId: string): Promise<string> {
+    await this.loadGIS();
+    return new Promise((resolve, reject) => {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+        callback: (response: any) => {
+          if (response.error) {
+            reject(new Error(`Google auth error: ${response.error_description ?? response.error}`));
+          } else {
+            resolve(response.access_token as string);
+          }
+        },
+        error_callback: (err: any) => {
+          reject(new Error(`Google auth cancelled or failed: ${err?.type ?? 'unknown'}`));
+        },
+      });
+      client.requestAccessToken({ prompt: 'consent' });
+    });
+  }
+
   async authenticateWithOutlook(): Promise<void> {
-    const clientId = import.meta.env.VITE_OUTLOOK_CLIENT_ID as string | undefined;
+    const clientId = (import.meta.env.VITE_OUTLOOK_CLIENT_ID as string | undefined)?.trim();
     if (!clientId) throw new Error('VITE_OUTLOOK_CLIENT_ID is not set in your .env file');
 
     const token = await this.openOAuthPopup(
