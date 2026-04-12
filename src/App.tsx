@@ -1489,6 +1489,8 @@ export default function App() {
     setShowTaskModal(false);
     setEditingTaskId(null);
     setShowEmojiPicker(false);
+    // Re-center the board on the current time indicator
+    scrollToNow();
   };
 
   const openEditTaskModal = (task: TaskItem) => {
