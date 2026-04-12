@@ -28,6 +28,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
+import { TourLauncher } from './components/Tour/TourLauncher';
 import {
   AUTO_START_MINUTES,
   AUTO_END_MINUTES,
@@ -600,6 +601,7 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
+  const [showTourLauncher, setShowTourLauncher] = useState(false);
   const [hourPresets, setHourPresets] = useState<HourPreset[]>(DEFAULT_HOUR_PRESETS);
   const [bufferSettings, setBufferSettings] = useState<BufferSettings>(DEFAULT_BUFFER_SETTINGS);
   const [tasks, setTasks] = useState<TaskItem[]>(hasSupabaseConfig ? [] : starterTasks);
@@ -2389,7 +2391,7 @@ export default function App() {
                     <button type="button" className="icon-btn" onClick={() => shiftWeek(7)}>
                       <ChevronRight size={16} />
                     </button>
-                    <button type="button" className="icon-btn">
+                    <button type="button" className="icon-btn" onClick={() => setShowTourLauncher(true)} aria-label="User guide">
                       <CircleHelp size={16} />
                     </button>
                   </div>
@@ -3231,6 +3233,8 @@ export default function App() {
           </section>
         </div>
       ) : null}
+
+      <TourLauncher open={showTourLauncher} onClose={() => setShowTourLauncher(false)} />
     </div>
   );
 }
