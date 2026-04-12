@@ -46,6 +46,7 @@ import {
   fromDateKey,
   isSchedulableTask,
   isFlexibleTask,
+  isWithinTaskWindows,
   sortTasksChronologically,
   startOfWeek,
   toDateKey,
@@ -94,6 +95,7 @@ interface DropPreview {
   startMinutes: number;
   valid: boolean;
   snapped: boolean; // true when scheduler moved it from raw hover position
+  outsideHours: boolean; // true when placed outside the task's working-hour ranges
   duration: number;
   dayIndex: number;
 }
@@ -2035,13 +2037,27 @@ export default function App() {
       task.id,
     );
 
+    // Check if the raw hover position falls outside the task's working-hour ranges
+    const withinHours = isWithinTaskWindows(task, hoverMinutes, task.duration);
+
     if (!placement) {
-      updateDropPreview({ date: hoverDate, startMinutes: hoverMinutes, valid: false, snapped: false, duration: task.duration, dayIndex });
+      // No valid slot found by the scheduler — still allow the drop at
+      // the hover position but flag it as outside working hours.
+      updateDropPreview({ date: hoverDate, startMinutes: hoverMinutes, valid: true, snapped: false, outsideHours: true, duration: task.duration, dayIndex });
       return;
     }
 
     const snapped = placement.scheduled_date !== hoverDate || placement.start_minutes !== hoverMinutes;
-    updateDropPreview({ date: placement.scheduled_date, startMinutes: placement.start_minutes, valid: true, snapped, duration: task.duration, dayIndex });
+
+    if (!withinHours && !snapped) {
+      // User is hovering in a gap — allow it, but show warning
+      updateDropPreview({ date: hoverDate, startMinutes: hoverMinutes, valid: true, snapped: false, outsideHours: true, duration: task.duration, dayIndex });
+    } else if (!withinHours && snapped) {
+      // Scheduler snapped away from the gap — show the hover position with warning instead
+      updateDropPreview({ date: hoverDate, startMinutes: hoverMinutes, valid: true, snapped: false, outsideHours: true, duration: task.duration, dayIndex });
+    } else {
+      updateDropPreview({ date: placement.scheduled_date, startMinutes: placement.start_minutes, valid: true, snapped, outsideHours: false, duration: task.duration, dayIndex });
+    }
   };
 
   const handleTaskPointerDown = (event: React.PointerEvent<HTMLElement>, taskId: string, draggable: boolean) => {
@@ -2480,7 +2496,7 @@ export default function App() {
                     {/* Drop indicator ghost */}
                     {dropPreview ? (
                       <div
-                        className={`drop-indicator ${dropPreview.valid ? 'valid' : 'invalid'}${dropPreview.snapped ? ' snapped' : ''}`}
+                        className={`drop-indicator ${dropPreview.valid ? 'valid' : 'invalid'}${dropPreview.snapped ? ' snapped' : ''}${dropPreview.outsideHours ? ' outside-hours' : ''}`}
                         style={{
                           top: `${BOARD_TOP_PADDING + (dropPreview.startMinutes - boardWindow.start) * PIXELS_PER_MINUTE}px`,
                           left: `calc(${TIME_GUTTER}px + ${dropPreview.dayIndex} * ((100% - ${TIME_GUTTER}px) / 7) + 4px)`,
@@ -2489,6 +2505,7 @@ export default function App() {
                         }}
                       >
                         {dropPreview.valid && dropPreview.snapped ? <span className="drop-indicator__label">Next available slot</span> : null}
+                        {dropPreview.outsideHours ? <span className="drop-indicator__label drop-indicator__label--warn">Outside working hours</span> : null}
                         {!dropPreview.valid ? <span className="drop-indicator__label drop-indicator__label--invalid">No slot available</span> : null}
                       </div>
                     ) : null}

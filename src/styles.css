@@ -891,6 +891,20 @@ button {
   background: rgba(229, 62, 62, 0.10);
 }
 
+.drop-indicator.outside-hours {
+  background: rgba(232, 162, 23, 0.08);
+  border: 2px dashed rgba(232, 162, 23, 0.5);
+}
+
+.drop-indicator.outside-hours::after {
+  background: rgba(232, 162, 23, 0.04);
+}
+
+.drop-indicator__label--warn {
+  color: #92610E;
+  background: rgba(232, 162, 23, 0.12);
+}
+
 @keyframes indicator-pulse {
   from { opacity: 0.5; }
   to   { opacity: 1; }
