@@ -11,6 +11,7 @@ import {
   Coffee,
   Link2,
   ListTodo,
+  MapPin,
   MinusCircle,
   MoreHorizontal,
   PanelLeftClose,
@@ -55,6 +56,7 @@ type RailTab = 'priorities' | 'tasks';
 type PriorityBucket = 'critical' | TaskPriority;
 type PresetKind = 'working' | 'personal' | 'custom';
 type TaskGroupType = TaskType;
+type SchedulingMode = 'auto' | 'manual';
 
 interface HourPreset {
   id: string;
@@ -76,6 +78,7 @@ interface TaskDraft {
   scheduleAfter: string;
   deadline: string;
   description: string;
+  schedulingMode: SchedulingMode;
   workflowEnabled: boolean;
   workflowAllocationMode: WorkflowAllocationMode;
   workflowStages: WorkflowStage[];
@@ -446,22 +449,44 @@ function taskBucket(task: TaskItem, _todayKey: string): PriorityBucket {
 
 function sortPriorityTasks(tasks: TaskItem[]) {
   return [...tasks].sort((left, right) => {
-    const leftDeadline = left.deadline ?? '9999-12-31';
-    const rightDeadline = right.deadline ?? '9999-12-31';
-    if (leftDeadline !== rightDeadline) {
-      return leftDeadline.localeCompare(rightDeadline);
+    const dueDifference = compareTaskDueValues(taskDueValue(left), taskDueValue(right));
+    if (dueDifference !== 0) {
+      return dueDifference;
     }
+
     if (left.scheduled_date !== right.scheduled_date) {
       return left.scheduled_date.localeCompare(right.scheduled_date);
     }
+
     return left.start_minutes - right.start_minutes;
-  });
+});
+}
+
+function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at
+    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
+    : (task.deadline ?? '');
+}
+
+function compareTaskDueValues(left?: string, right?: string) {
+  const leftValue = left
+    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+  const rightValue = right
+    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+
+  return leftValue - rightValue;
+}
+
+function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
+  return task.is_pinned ? 'Manual' : 'Auto';
 }
 
 function taskTypeLabel(type: TaskType) {
   if (type === 'focus') return 'Focus Time';
-  if (type === 'buffer') return 'Habits';
-  return 'Tasks';
+  if (type === 'buffer') return 'Buffer';
+  return 'Task';
 }
 
 function buildCompactSectionKey(bucket: PriorityBucket, type: TaskGroupType) {
@@ -511,6 +536,32 @@ function datetimeToStartMinutes(dt: string): number {
   return 9 * 60;
 }
 
+function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at ?? task.deadline ?? '';
+}
+
+function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at
+    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
+    : (task.deadline ?? '');
+}
+
+function compareTaskDueValues(left?: string, right?: string) {
+  const leftValue = left
+    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+  const rightValue = right
+    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+
+  return leftValue - rightValue;
+}
+
+function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
+  return task.is_pinned ? 'Manual' : 'Auto';
+}
+
+
 function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
   return {
     title: '',
@@ -525,6 +576,7 @@ function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
     scheduleAfter: dateKeyToDatetime(selectedDate, 9, 0),
     deadline: '',
     description: '',
+    schedulingMode: 'auto',
     workflowEnabled: false,
     workflowAllocationMode: 'auto',
     workflowStages: DEFAULT_WORKFLOW_STAGES.map((s) => ({ ...s })),
@@ -535,6 +587,7 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
   const wfConfig = task.workflow_config;
   const scheduleAfterDt = normalizeDatetimeValue(task.earliest_start_at ?? task.schedule_after ?? task.scheduled_date, 9, 0);
   const deadlineDt = normalizeDatetimeValue(task.due_at ?? task.deadline, 18, 0);
+
   return {
     title: task.title,
     type: task.type,
@@ -548,6 +601,7 @@ function buildDraftFromTask(task: TaskItem, hourPresetId: string): TaskDraft {
     scheduleAfter: scheduleAfterDt,
     deadline: deadlineDt,
     description: task.description ?? '',
+    schedulingMode: task.is_pinned ? 'manual' : 'auto',
     workflowEnabled: Boolean(wfConfig),
     workflowAllocationMode: wfConfig?.allocation_mode ?? 'auto',
     workflowStages: wfConfig?.stages
@@ -797,6 +851,13 @@ export default function App() {
     [tasks],
   );
 
+  const timezoneLabel = useMemo(() => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(new Date());
+  return parts.find((part) => part.type === 'timeZoneName')?.value
+    ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    ?? 'Local';
+}, []);
+
   const activeSchedulableTasks = useMemo(
     () => schedulableTasks.filter((task) => !task.done),
     [schedulableTasks],
@@ -808,7 +869,10 @@ export default function App() {
   }, [schedulableTasks, todayKey, weekDates]);
 
   const planningEnd = useMemo(() => {
-    const seeds = [weekDates[6], ...schedulableTasks.map((task) => task.deadline ?? task.scheduled_date)];
+    const seeds = [
+      weekDates[6],
+      ...schedulableTasks.map((task) => taskDueDateKey(task) || task.scheduled_date),
+    ];
     const latest = seeds.reduce((currentLatest, current) => (current > currentLatest ? current : currentLatest));
     return addDays(latest, 14);
   }, [schedulableTasks, weekDates]);
@@ -845,11 +909,6 @@ export default function App() {
     [schedulableTasks, todayKey, selectedDate, bufferSettings],
   );
 
-  const filteredOpenTasks = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return activeSchedulableTasks
-      .filter((task) => (normalizedQuery ? task.title.toLowerCase().includes(normalizedQuery) : true));
-  }, [activeSchedulableTasks, query]);
 
   const groupedTasks = useMemo(() => {
     const grouped: Record<PriorityBucket, TaskItem[]> = {
@@ -858,6 +917,37 @@ export default function App() {
       medium: [],
       low: [],
     };
+
+  const taskTitleById = useMemo(
+    () => new Map(tasks.map((task) => [task.id, task.title])),
+    [tasks],
+  );
+
+  const buildTaskSearchText = (task: TaskItem) => {
+    const workflowStageNames = task.workflow_config?.stages?.map((stage) => stage.name).join(' ') ?? '';
+    const parentTitle = task.workflow_parent_id ? taskTitleById.get(task.workflow_parent_id) ?? '' : '';
+
+    return [
+      task.title,
+      task.description ?? '',
+      task.hour_preset ?? '',
+      workflowStageNames,
+      task.workflow_stage_id ?? '',
+      parentTitle,
+      task.is_pinned ? 'manual pinned' : 'auto scheduled',
+    ]
+      .join(' ')
+      .toLowerCase();
+  };
+
+
+  const filteredOpenTasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return activeSchedulableTasks.filter((task) => {
+      if (!normalizedQuery) return true;
+      return buildTaskSearchText(task).includes(normalizedQuery);
+    });
+  }, [activeSchedulableTasks, query, taskTitleById]);
 
     filteredOpenTasks.forEach((task) => {
       grouped[taskBucket(task, todayKey)].push(task);
@@ -893,10 +983,12 @@ export default function App() {
         return leftStart - rightStart;
       }
 
-      const leftDeadline = left.deadline ?? '9999-12-31';
-      const rightDeadline = right.deadline ?? '9999-12-31';
-      if (leftDeadline !== rightDeadline) {
-        return leftDeadline.localeCompare(rightDeadline);
+      const dueDifference = compareTaskDueValues(
+        taskDueValue(left),
+        taskDueValue(right)
+      );
+      if (dueDifference !== 0) {
+        return dueDifference;
       }
 
       if (left.done !== right.done) {
@@ -1078,7 +1170,7 @@ export default function App() {
         scheduled_date: existingTask?.scheduled_date ?? scheduleAfter,
         start_minutes: existingTask?.start_minutes ?? Math.max(scheduleAfterMinutes, presetBounds.start_minutes),
         done: existingTask?.done ?? false,
-        is_pinned: false, // modal save re-enables auto-scheduling
+        is_pinned: existingTask ? currentDraft.schedulingMode === 'manual' : false,
       } satisfies TaskItem,
       resolvedEarliestStartAt,
       dueAt,
@@ -2187,9 +2279,10 @@ export default function App() {
             <div className="priority-card__meta">
               <span>{task.priority} priority</span>
               <span>{task.duration} mins</span>
+              <span>{getSchedulingModeLabel(task)}</span>
               {taskBlocks.length > 1 ? <span>split</span> : null}
               {task.hour_preset ? <span>{task.hour_preset}</span> : null}
-              {task.deadline ? <span>due {formatDate(task.deadline, { month: 'short', day: 'numeric' })}</span> : null}
+              {taskDueDateKey(task) ? <span>due {formatDate(taskDueDateKey(task), { month: 'short', day: 'numeric' })}</span> : null}
             </div>
           </div>
         </article>
@@ -2338,7 +2431,7 @@ export default function App() {
 
                 <div className="week-board">
                   <div className="week-board__header">
-                    <div className="timezone-chip">GMT+8</div>
+                    <div className="timezone-chip">{timezoneLabel}</div>
                     {weekDates.map((dateKey) => (
                       <button
                         key={dateKey}
@@ -2792,6 +2885,34 @@ export default function App() {
                 <div className={`scheduling-hint${draftSchedulingHint.warn ? ' scheduling-hint--warn' : ''}`}>
                   {draftSchedulingHint.warn ? <Zap size={14} /> : <CalendarRange size={14} />}
                   <span>{draftSchedulingHint.text}</span>
+                </div>
+              ) : null}
+
+              {editingTaskId ? (
+                <div className="modal-card">
+                  <div className="modal-field">
+                    <label className="modal-field__label">Scheduling mode</label>
+                    <div className="seg-control">
+                      <button
+                        type="button"
+                        className={draft.schedulingMode === 'auto' ? 'active' : ''}
+                        onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'auto' }))}
+                      >
+                        Auto-scheduled
+                      </button>
+                      <button
+                        type="button"
+                        className={draft.schedulingMode === 'manual' ? 'active' : ''}
+                        onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'manual' }))}
+                      >
+                        <MapPin size={14} />
+                        Manually pinned
+                      </button>
+                    </div>
+                    <small>
+                      Manual keeps the current calendar slot. Auto lets the scheduler place it again.
+                    </small>
+                  </div>
                 </div>
               ) : null}
 
