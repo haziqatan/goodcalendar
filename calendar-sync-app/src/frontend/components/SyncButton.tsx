@@ -1,0 +1,63 @@
+Here are the contents for the `src/components/CalendarIntegration.tsx` file:
+
+import React, { useEffect } from 'react';
+import { gapi } from 'gapi-script';
+import { useAuth } from '../hooks/useAuth'; // Custom hook for authentication
+
+const CalendarIntegration = () => {
+  const { user, signIn, signOut } = useAuth();
+
+  useEffect(() => {
+    const initClient = () => {
+      gapi.client.init({
+        apiKey: process.env.REACT_APP_GOOGLE_API_KEY,
+        clientId: process.env.REACT_APP_GOOGLE_CLIENT_ID,
+        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'],
+        scope: 'https://www.googleapis.com/auth/calendar',
+      }).then(() => {
+        if (user) {
+          listUpcomingEvents();
+        }
+      });
+    };
+
+    gapi.load('client:auth2', initClient);
+  }, [user]);
+
+  const listUpcomingEvents = () => {
+    gapi.client.calendar.events.list({
+      calendarId: 'primary',
+      timeMin: new Date().toISOString(),
+      maxResults: 10,
+      singleEvents: true,
+      orderBy: 'startTime',
+    }).then(response => {
+      const events = response.result.items;
+      console.log('Upcoming events:', events);
+    });
+  };
+
+  const handleGoogleSignIn = () => {
+    signIn();
+  };
+
+  const handleGoogleSignOut = () => {
+    signOut();
+  };
+
+  return (
+    <div>
+      <h2>Calendar Integration</h2>
+      {user ? (
+        <div>
+          <p>Welcome, {user.name}</p>
+          <button onClick={handleGoogleSignOut}>Sign Out</button>
+        </div>
+      ) : (
+        <button onClick={handleGoogleSignIn}>Sign In with Google</button>
+      )}
+    </div>
+  );
+};
+
+export default CalendarIntegration;
