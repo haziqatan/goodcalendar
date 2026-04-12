@@ -2043,9 +2043,16 @@ export default function App() {
   };
 
   const handleTaskPointerDown = (event: React.PointerEvent<HTMLElement>, taskId: string, draggable: boolean) => {
-    if (!draggable || event.button !== 0) return;
+    if (event.button !== 0) return;
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
+
+    // Non-draggable tasks (e.g. workflow stages) still open the edit modal on click
+    if (!draggable) {
+      const editId = task.workflow_parent_id ?? task.id;
+      openEditTaskModalById(editId);
+      return;
+    }
 
     event.preventDefault(); // suppress native drag & text-select
 
