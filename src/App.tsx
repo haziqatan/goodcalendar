@@ -35,6 +35,8 @@ import {
 } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { TourLauncher } from './components/Tour/TourLauncher';
+import { CalendarIntegration } from './components/CalendarIntegration';
+import { calendarSyncService } from './lib/calendarSync';
 import {
   AUTO_START_MINUTES,
   AUTO_END_MINUTES,
@@ -693,6 +695,15 @@ export default function App() {
   // Tracks which day tab is active per preset in the hours settings modal (null = "All days" default)
   const [presetDayTab, setPresetDayTab] = useState<Record<string, DayKey | null>>({});
   const [showBufferSettings, setShowBufferSettings] = useState(false);
+  const [showCalendarIntegration, setShowCalendarIntegration] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('calendarConnected') === 'true') {
+      // Clean the URL without reloading
+      window.history.replaceState({}, '', '/');
+      return true;
+    }
+    return false;
+  });
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [collapsedCompactSections, setCollapsedCompactSections] = useState<Record<string, boolean>>({});
@@ -896,6 +907,28 @@ export default function App() {
       setLoading(false);
     };
     void load();
+  }, []);
+
+  // Handle auth callbacks from OAuth providers
+  useEffect(() => {
+    if (!supabase) return;
+
+    const handleAuthStateChange = async (event: string, session: any) => {
+      if (event === 'SIGNED_IN' && session) {
+        // User signed in, potentially from OAuth callback
+        // The calendar sync service will handle storing calendar info
+        console.log('User signed in via OAuth');
+      }
+    };
+
+    supabase.auth.onAuthStateChange(handleAuthStateChange);
+
+    // Check for auth callback on mount
+    const urlParams = new URLSearchParams(window.location.hash.substring(1));
+    if (urlParams.has('access_token')) {
+      // This is an auth callback, let Supabase handle it
+      supabase.auth.getSession();
+    }
   }, []);
 
   const weekDates = useMemo(
@@ -1817,6 +1850,18 @@ export default function App() {
     );
     focusDate(item.scheduled_date);
     setView('planner');
+
+    // If a primary calendar is synced, push this task to it
+    try {
+      const connected = await calendarSyncService.getCalendars();
+      const primary = connected.find(c => c.primary_calendar && c.sync_enabled);
+      if (primary) {
+        await calendarSyncService.pushTaskToExternal(primary.id, item);
+      }
+    } catch (err) {
+      console.error('Failed to push task to external calendar:', err);
+    }
+
     closeTaskModal();
     setStatusMessage(
       `${item.title} ${editingTaskId ? 'updated' : 'placed'} on ${formatDate(item.scheduled_date, {
@@ -2545,11 +2590,22 @@ export default function App() {
             const Icon = item.icon;
             return (
               <div key={item.label} className="nav-group">
-                <div className="nav-item static">
-                  <Icon size={16} />
-                  <span>{item.label}</span>
-                  {item.children ? <ChevronDown size={14} /> : null}
-                </div>
+                {item.label === 'Calendar Sync' ? (
+                  <button
+                    type="button"
+                    className="nav-item"
+                    onClick={() => setShowCalendarIntegration(true)}
+                  >
+                    <Icon size={16} />
+                    <span>{item.label}</span>
+                  </button>
+                ) : (
+                  <div className="nav-item static">
+                    <Icon size={16} />
+                    <span>{item.label}</span>
+                    {item.children ? <ChevronDown size={14} /> : null}
+                  </div>
+                )}
                 {item.children ? (
                   <div className="nav-children">
                     {item.children.map((child) => (
@@ -3696,6 +3752,24 @@ export default function App() {
                 Done
               </button>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {showCalendarIntegration ? (
+        <div className="modal-backdrop" onClick={() => setShowCalendarIntegration(false)}>
+          <section className="settings-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="settings-modal__header">
+              <div>
+                <strong>Calendar Integration</strong>
+                <p>Sync with Google Calendar and Outlook</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setShowCalendarIntegration(false)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <CalendarIntegration onClose={() => setShowCalendarIntegration(false)} />
           </section>
         </div>
       ) : null}
