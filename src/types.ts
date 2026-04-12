@@ -52,6 +52,8 @@ export interface TaskItem {
   scheduled_date: string;
   start_minutes: number;
   done: boolean;
+  done_at?: string;       // ISO timestamp when marked done
+  deleted_at?: string;    // ISO timestamp for soft delete (null = active)
   is_pinned?: boolean;
   workflow_config?: WorkflowConfig;
   workflow_parent_id?: string;

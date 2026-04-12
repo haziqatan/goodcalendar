@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
+  Archive,
   BarChart3,
   CalendarRange,
   ChevronDown,
@@ -23,9 +24,11 @@ import {
   PanelRightOpen,
   Plus,
   PlusCircle,
+  RotateCcw,
   Search,
   Settings2,
   SmilePlus,
+  Trash2,
   Users,
   X,
   Zap,
@@ -56,7 +59,7 @@ import {
 } from './lib/scheduler';
 import type { BufferSettings, DurationUnit, ScheduleBlock, ScheduleWarning, TaskItem, TaskPriority, TaskType, TimeRange, WorkflowAllocationMode, WorkflowConfig, WorkflowStage } from './types';
 
-type ViewMode = 'planner' | 'priorities';
+type ViewMode = 'planner' | 'priorities' | 'archive';
 type RailTab = 'priorities' | 'tasks';
 type PriorityBucket = 'critical' | TaskPriority;
 type PresetKind = 'working' | 'personal' | 'custom';
@@ -390,6 +393,7 @@ const starterTasks: TaskItem[] = [
 const navPrimary = [
   { id: 'planner' as ViewMode, label: 'Planner', icon: CalendarRange },
   { id: 'priorities' as ViewMode, label: 'Priorities', icon: BarChart3 },
+  { id: 'archive' as ViewMode, label: 'Archive', icon: Archive },
 ];
 
 const navSecondary = [
@@ -899,9 +903,21 @@ export default function App() {
     [weekStart],
   );
 
-  const schedulableTasks = useMemo(
-    () => tasks.filter((task) => isSchedulableTask(task)),
+  // Active tasks: exclude soft-deleted items
+  const activeTasks = useMemo(
+    () => tasks.filter((task) => !task.deleted_at),
     [tasks],
+  );
+
+  // Archive: done or soft-deleted tasks (excluding workflow children — show parent only)
+  const archivedTasks = useMemo(
+    () => tasks.filter((task) => (task.deleted_at || task.done) && !task.workflow_parent_id),
+    [tasks],
+  );
+
+  const schedulableTasks = useMemo(
+    () => activeTasks.filter((task) => isSchedulableTask(task)),
+    [activeTasks],
   );
 
   const timezoneLabel = useMemo(() => {
@@ -1864,21 +1880,69 @@ export default function App() {
       return;
     }
 
-    // Remove parent + any workflow children from local state
-    setTasks((prev) => prev.filter((task) => task.id !== targetId && task.workflow_parent_id !== targetId));
+    const now = new Date().toISOString();
+    // Soft-delete: mark parent + any workflow children
+    setTasks((prev) => prev.map((task) =>
+      task.id === targetId || task.workflow_parent_id === targetId
+        ? { ...task, deleted_at: now }
+        : task,
+    ));
     closeTaskModal();
-    setStatusMessage(`${target.title} deleted.`);
+    setStatusMessage(`${target.title} moved to archive.`);
 
     if (!supabase) {
       return;
     }
 
-    // Delete workflow children first if this is a workflow parent
+    const patch = { deleted_at: now };
     if (target.workflow_config) {
-      await supabase.from('schedule_items').delete().eq('workflow_parent_id', targetId);
+      await supabase.from('schedule_items').update(patch).eq('workflow_parent_id', targetId);
     }
+    const { error } = await supabase.from('schedule_items').update(patch).eq('id', targetId);
+    if (error) {
+      setSyncMessage(`Delete failed: ${error.message}`);
+      setTasks(previousTasks);
+    }
+  };
 
-    const { error } = await supabase.from('schedule_items').delete().eq('id', targetId);
+  const restoreTask = async (id: string) => {
+    const previousTasks = tasks;
+    const target = tasks.find((task) => task.id === id);
+    if (!target) return;
+
+    // Restore parent + workflow children
+    setTasks((prev) => prev.map((task) =>
+      task.id === id || task.workflow_parent_id === id
+        ? { ...task, deleted_at: undefined, done: false, done_at: undefined }
+        : task,
+    ));
+    setStatusMessage(`${target.title} restored.`);
+
+    if (!supabase) return;
+    const patch = { deleted_at: null, done: false, done_at: null };
+    if (target.workflow_config) {
+      await supabase.from('schedule_items').update(patch).eq('workflow_parent_id', id);
+    }
+    const { error } = await supabase.from('schedule_items').update(patch).eq('id', id);
+    if (error) {
+      setSyncMessage(`Restore failed: ${error.message}`);
+      setTasks(previousTasks);
+    }
+  };
+
+  const permanentDeleteTask = async (id: string) => {
+    const previousTasks = tasks;
+    const target = tasks.find((task) => task.id === id);
+    if (!target) return;
+
+    setTasks((prev) => prev.filter((task) => task.id !== id && task.workflow_parent_id !== id));
+    setStatusMessage(`${target.title} permanently deleted.`);
+
+    if (!supabase) return;
+    if (target.workflow_config) {
+      await supabase.from('schedule_items').delete().eq('workflow_parent_id', id);
+    }
+    const { error } = await supabase.from('schedule_items').delete().eq('id', id);
     if (error) {
       setSyncMessage(`Delete failed: ${error.message}`);
       setTasks(previousTasks);
@@ -1893,9 +1957,13 @@ export default function App() {
     }
 
     const nextDone = !target.done;
-    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, done: nextDone } : task)));
+    const patch: Partial<TaskItem> = {
+      done: nextDone,
+      done_at: nextDone ? new Date().toISOString() : undefined,
+    };
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, ...patch } : task)));
     setStatusMessage(`${target.title} marked ${nextDone ? 'complete' : 'active'}.`);
-    await persistTaskUpdate(id, { done: nextDone }, previousTasks);
+    await persistTaskUpdate(id, patch, previousTasks);
   };
 
   const updateTaskPriority = async (id: string, priority: TaskPriority) => {
@@ -2506,7 +2574,7 @@ export default function App() {
       <main className="workspace">
         <header className="workspace-header">
           <div>
-            <h1>{view === 'planner' ? 'Planner' : 'Priorities'}</h1>
+            <h1>{view === 'planner' ? 'Planner' : view === 'archive' ? 'Archive' : 'Priorities'}</h1>
             <p>{statusMessage}</p>
           </div>
           <div className="header-actions">
@@ -2857,7 +2925,7 @@ export default function App() {
             </aside>
             ) : null}
           </section>
-        ) : (
+        ) : view === 'priorities' ? (
           <section className="priorities-view">
             <div className="priorities-toolbar">
               <label className="search-field wide">
@@ -2891,7 +2959,70 @@ export default function App() {
               ))}
             </div>
           </section>
-        )}
+        ) : view === 'archive' ? (
+          <section className="archive-view">
+            <div className="archive-toolbar">
+              <p className="archive-subtitle">{archivedTasks.length} item{archivedTasks.length !== 1 ? 's' : ''} in archive</p>
+            </div>
+            {archivedTasks.length === 0 ? (
+              <div className="archive-empty">
+                <Archive size={40} />
+                <p>No archived items yet</p>
+                <small>Completed and deleted tasks will appear here</small>
+              </div>
+            ) : (
+              <div className="archive-list">
+                {archivedTasks.map((task) => {
+                  const status: 'deleted' | 'done' = task.deleted_at ? 'deleted' : 'done';
+                  const timestamp = task.deleted_at ?? task.done_at;
+                  const timeLabel = timestamp
+                    ? new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+                    : '';
+                  const childCount = tasks.filter((t) => t.workflow_parent_id === task.id).length;
+
+                  return (
+                    <article key={task.id} className={`archive-card status-${status}`}>
+                      <div className="archive-card__accent" />
+                      <div className="archive-card__content">
+                        <div className="archive-card__top">
+                          <div className="archive-card__info">
+                            <strong>{task.title}</strong>
+                            <div className="archive-card__meta">
+                              <span className={`archive-status-badge ${status}`}>
+                                {status === 'deleted' ? <><Trash2 size={11} /> Deleted</> : <><CircleCheck size={11} /> Done</>}
+                              </span>
+                              <span>{task.priority}</span>
+                              <span>{formatDuration(task.duration)}</span>
+                              {childCount > 0 ? <span>{childCount} stages</span> : null}
+                              {timeLabel ? <span>{timeLabel}</span> : null}
+                            </div>
+                          </div>
+                          <div className="archive-card__actions">
+                            <button
+                              type="button"
+                              className="ghost-btn"
+                              onClick={() => void restoreTask(task.id)}
+                            >
+                              <RotateCcw size={13} /> Restore
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-btn danger-btn"
+                              onClick={() => void permanentDeleteTask(task.id)}
+                            >
+                              <Trash2 size={13} /> Delete
+                            </button>
+                          </div>
+                        </div>
+                        {task.description ? <p className="archive-card__desc">{task.description}</p> : null}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        ) : null}
         </div>{/* workspace-main */}
 
         <footer className="workspace-footer">

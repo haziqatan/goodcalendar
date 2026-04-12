@@ -3150,3 +3150,152 @@ button {
   padding-top: 16px;
   border-top: 1px solid var(--line-soft);
 }
+
+/* ─── Archive View ─────────────────────────────────────────────────────────── */
+
+.archive-view {
+  padding: 24px;
+  max-width: 800px;
+}
+
+.archive-toolbar {
+  margin-bottom: 20px;
+}
+
+.archive-subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.archive-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 80px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.archive-empty p {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 8px 0 0;
+}
+
+.archive-empty small {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.archive-card {
+  display: grid;
+  grid-template-columns: 4px 1fr;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: box-shadow 120ms ease;
+}
+
+.archive-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.archive-card__accent {
+  background: var(--line);
+}
+
+.archive-card.status-done .archive-card__accent {
+  background: var(--green);
+}
+
+.archive-card.status-deleted .archive-card__accent {
+  background: var(--red);
+}
+
+.archive-card__content {
+  padding: 12px 16px;
+}
+
+.archive-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.archive-card__info {
+  min-width: 0;
+  flex: 1;
+}
+
+.archive-card__info strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.archive-card.status-done .archive-card__info strong {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.archive-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.archive-card__meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line-soft);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-2);
+  text-transform: capitalize;
+}
+
+.archive-status-badge {
+  font-weight: 600 !important;
+}
+
+.archive-status-badge.done {
+  background: var(--green-soft) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
+
+.archive-status-badge.deleted {
+  background: var(--red-soft) !important;
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+}
+
+.archive-card__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.archive-card__desc {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
