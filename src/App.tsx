@@ -1150,7 +1150,7 @@ export default function App() {
         scheduled_date: existingTask?.scheduled_date ?? scheduleAfter,
         start_minutes: existingTask?.start_minutes ?? Math.max(scheduleAfterMinutes, presetBounds.start_minutes),
         done: existingTask?.done ?? false,
-        is_pinned: existingTask ? currentDraft.schedulingMode === 'manual' : false,
+        is_pinned: currentDraft.schedulingMode === 'manual',
       } satisfies TaskItem,
       resolvedEarliestStartAt,
       dueAt,
@@ -2871,30 +2871,29 @@ export default function App() {
 
               {editingTaskId ? (
                 <div className="modal-card">
-                  <div className="modal-field">
-                    <label className="modal-field__label">Scheduling mode</label>
-                    <div className="seg-control">
-                      <button
-                        type="button"
-                        className={draft.schedulingMode === 'auto' ? 'active' : ''}
-                        onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'auto' }))}
-                      >
-                        Auto-scheduled
-                      </button>
-                      <button
-                        type="button"
-                        className={draft.schedulingMode === 'manual' ? 'active' : ''}
-                        onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'manual' }))}
-                      >
-                        <MapPin size={14} />
-                        Manually pinned
-                      </button>
-                    </div>
-                    <small>
-                      Manual keeps the current calendar slot. Auto lets the scheduler place it again.
-                    </small>
+                <div className="modal-field">
+                  <label className="modal-field__label">Scheduling mode</label>
+                  <div className="seg-control">
+                    <button
+                      type="button"
+                      className={draft.schedulingMode === 'auto' ? 'active' : ''}
+                      onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'auto' }))}
+                    >
+                      Auto-scheduled
+                    </button>
+                    <button
+                      type="button"
+                      className={draft.schedulingMode === 'manual' ? 'active' : ''}
+                      onClick={() => setDraft((prev) => ({ ...prev, schedulingMode: 'manual' }))}
+                    >
+                      Manually pinned
+                    </button>
                   </div>
+                  <small>
+                    Manual keeps the task fixed in its calendar slot. Auto lets the scheduler place it again.
+                  </small>
                 </div>
+              </div>
               ) : null}
 
               {/* ── More options accordion ── */}

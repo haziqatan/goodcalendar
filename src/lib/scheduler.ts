@@ -790,18 +790,6 @@ export function findPlacement(
   return attempt(true, deadline, true) ?? attempt(false, deadline, true);
 }
 
-function compareDeadline(left?: string, right?: string) {
-  if (left && right) {
-    return left.localeCompare(right);
-  }
-  if (left) {
-    return -1;
-  }
-  if (right) {
-    return 1;
-  }
-  return 0;
-}
 
 export function autoPlaceDay(tasks: TaskItem[], dateKey: string, bufferSettings: BufferSettings = DEFAULT_BUFFER_SETTINGS) {
   const schedulableTasks = tasks.filter(isSchedulableTask);
@@ -812,7 +800,7 @@ export function autoPlaceDay(tasks: TaskItem[], dateKey: string, bufferSettings:
   const planningStart = seeds.reduce((earliest, current) => (current < earliest ? current : earliest));
   const planningEnd = addDays(
     schedulableTasks
-      .map((task) => task.deadline ?? task.scheduled_date)
+      .map((task) => dateKeyFromDateTime(task.due_at) || task.deadline || task.scheduled_date)
       .reduce((latest, current) => (current > latest ? current : latest), dateKey),
     14,
   );
