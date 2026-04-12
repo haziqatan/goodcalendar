@@ -459,29 +459,9 @@ function sortPriorityTasks(tasks: TaskItem[]) {
     }
 
     return left.start_minutes - right.start_minutes;
-});
+  });
 }
 
-function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
-  return task.due_at
-    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
-    : (task.deadline ?? '');
-}
-
-function compareTaskDueValues(left?: string, right?: string) {
-  const leftValue = left
-    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-  const rightValue = right
-    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-
-  return leftValue - rightValue;
-}
-
-function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
-  return task.is_pinned ? 'Manual' : 'Auto';
-}
 
 function taskTypeLabel(type: TaskType) {
   if (type === 'focus') return 'Focus Time';
@@ -536,30 +516,7 @@ function datetimeToStartMinutes(dt: string): number {
   return 9 * 60;
 }
 
-function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
-  return task.due_at ?? task.deadline ?? '';
-}
-
-function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
-  return task.due_at
-    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
-    : (task.deadline ?? '');
-}
-
-function compareTaskDueValues(left?: string, right?: string) {
-  const leftValue = left
-    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-  const rightValue = right
-    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
-    : Number.POSITIVE_INFINITY;
-
-  return leftValue - rightValue;
-}
-
-function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
-  return task.is_pinned ? 'Manual' : 'Auto';
-}
+// (Active definitions for taskDueValue, taskDueDateKey, compareTaskDueValues, getSchedulingModeLabel are below)
 
 
 function buildDraft(selectedDate: string, hourPresetId: string): TaskDraft {
@@ -852,11 +809,11 @@ export default function App() {
   );
 
   const timezoneLabel = useMemo(() => {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(new Date());
-  return parts.find((part) => part.type === 'timeZoneName')?.value
-    ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-    ?? 'Local';
-}, []);
+    const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(new Date());
+    return parts.find((part) => part.type === 'timeZoneName')?.value
+      ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+      ?? 'Local';
+  }, []);
 
   const activeSchedulableTasks = useMemo(
     () => schedulableTasks.filter((task) => !task.done),
@@ -910,14 +867,6 @@ export default function App() {
   );
 
 
-  const groupedTasks = useMemo(() => {
-    const grouped: Record<PriorityBucket, TaskItem[]> = {
-      critical: [],
-      high: [],
-      medium: [],
-      low: [],
-    };
-
   const taskTitleById = useMemo(
     () => new Map(tasks.map((task) => [task.id, task.title])),
     [tasks],
@@ -940,7 +889,6 @@ export default function App() {
       .toLowerCase();
   };
 
-
   const filteredOpenTasks = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return activeSchedulableTasks.filter((task) => {
@@ -948,6 +896,14 @@ export default function App() {
       return buildTaskSearchText(task).includes(normalizedQuery);
     });
   }, [activeSchedulableTasks, query, taskTitleById]);
+
+  const groupedTasks = useMemo(() => {
+    const grouped: Record<PriorityBucket, TaskItem[]> = {
+      critical: [],
+      high: [],
+      medium: [],
+      low: [],
+    };
 
     filteredOpenTasks.forEach((task) => {
       grouped[taskBucket(task, todayKey)].push(task);
@@ -3253,4 +3209,30 @@ export default function App() {
       ) : null}
     </div>
   );
+}
+
+// Active definitions for taskDueValue, taskDueDateKey, compareTaskDueValues, getSchedulingModeLabel
+function taskDueValue(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at ?? task.deadline ?? '';
+}
+
+function taskDueDateKey(task: Pick<TaskItem, 'due_at' | 'deadline'>) {
+  return task.due_at
+    ? datetimeToDateKey(normalizeDatetimeValue(task.due_at, 18, 0))
+    : (task.deadline ?? '');
+}
+
+function compareTaskDueValues(left?: string, right?: string) {
+  const leftValue = left
+    ? Date.parse(left.includes('T') || left.includes(' ') ? left.replace(' ', 'T') : `${left}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+  const rightValue = right
+    ? Date.parse(right.includes('T') || right.includes(' ') ? right.replace(' ', 'T') : `${right}T23:59:59`)
+    : Number.POSITIVE_INFINITY;
+
+  return leftValue - rightValue;
+}
+
+function getSchedulingModeLabel(task: Pick<TaskItem, 'is_pinned'>) {
+  return task.is_pinned ? 'Manual' : 'Auto';
 }
